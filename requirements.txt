@@ -1,0 +1,16 @@
+# Dependencias principales
+MetaTrader5==5.0.45
+numpy<2.0.0
+pandas>=1.5.0,<2.0.0
+pandas-ta>=0.3.14b0
+backtesting==0.3.3
+pytz>=2024.1
+python-dotenv>=1.0.0
+python-dateutil>=2.8.2
+ta>=0.10.2
+scipy>=1.10.0
+
+# Dependencias para pruebas
+pytest>=8.3.5
+pytest-cov>=6.1.1
+pytest-mock>=3.14.0
