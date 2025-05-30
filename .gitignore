@@ -22,6 +22,7 @@ ENV/
 # Local configuration
 .env
 config.ini
+KILL_SWITCH.txt
 
 # Logs
 logs/

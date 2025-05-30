@@ -86,8 +86,76 @@ def sample_market_data():
 
 
 @pytest.fixture
-def mock_config():
-    """Create a mock ConfigManager for testing."""
+def mock_config_manager_for_engine():
+    """
+    Create a more comprehensive mock ConfigManager specifically for StrategyEngine tests,
+    or for general use if applicable.
+    """
+    mock_cm = MagicMock(spec=ConfigManager)
+
+    # Global settings, including strategy type and parameters
+    mock_cm.get_global_settings.return_value = {
+        C.CONFIG_STRATEGY: {
+            C.CONFIG_STRATEGY_TYPE: "MACD",  # Default or common strategy for testing
+            C.CONFIG_STRATEGY_MIN_SIGNAL_STRENGTH: 0.7
+        },
+        # Add other global settings if StrategyEngine or strategies use them directly
+        C.CONFIG_PAPER_TRADING: False, # Example
+    }
+
+    # Timeframes configuration
+    mock_cm.get_timeframes.return_value = {
+        "M15": "mt5_timeframe_m15_dummy", # Value isn't used by strategy, just keys
+        "H1": "mt5_timeframe_h1_dummy",
+        "H4": "mt5_timeframe_h4_dummy",
+        "D1": "mt5_timeframe_d1_dummy",
+    }
+
+    # Default indicator parameters (can be overridden by symbol-specific if needed)
+    mock_cm.get_indicator_params.return_value = {
+        C.CONFIG_INDICATOR_MACD_FAST: 12,
+        C.CONFIG_INDICATOR_MACD_SLOW: 26,
+        C.CONFIG_INDICATOR_MACD_SIGNAL: 9,
+        C.CONFIG_INDICATOR_RSI_PERIOD: 14,
+        C.CONFIG_INDICATOR_ATR_PERIOD: 14,
+        # Default for ADX, Stochastic, BB, etc.
+        'adx_period': 14,
+        'stoch_k_period': 14,
+        'stoch_d_period': 3,
+        'stoch_k_slowing': 3,
+        'bb_length': 20,
+        'bb_std': 2.0,
+        # Default for Ichimoku
+        'ichimoku_tenkan': 9,
+        'ichimoku_kijun': 26,
+        'ichimoku_senkou_span_b': 52,
+    }
+
+    # Mock get_symbol_config to return a merged view if needed by a strategy
+    # For now, assuming strategies mostly use get_indicator_params, get_sr_params, etc.
+    # If a strategy calls get_symbol_config directly, this might need more detail.
+    # Example:
+    # def mock_get_symbol_config(symbol):
+    #     base_config = {
+    #         C.CONFIG_INDICATORS: mock_cm.get_indicator_params(symbol), # Uses the above
+    #         C.CONFIG_SR: {}, # Mock SR params
+    #         C.CONFIG_RISK: {}  # Mock Risk params
+    #     }
+    #     # Add symbol specific overrides if necessary for a test
+    #     return base_config
+    # mock_cm.get_symbol_config.side_effect = mock_get_symbol_config
+
+    mock_cm.get_sr_params.return_value = {} # Default SR params
+    mock_cm.get_risk_params.return_value = {} # Default Risk params
+
+    return mock_cm
+
+# Keep the old mock_config if other tests rely on its specific simple structure,
+# or update them to use the more comprehensive one.
+# For clarity, I'll rename the old one or ensure new tests use the new one.
+@pytest.fixture
+def simple_mock_config():
+    """A simpler mock ConfigManager, similar to the original mock_config."""
     config = MagicMock(spec=ConfigManager)
     config.get_indicator_params.return_value = {
         'rsi_period': 14,
@@ -97,4 +165,7 @@ def mock_config():
         'bb_period': 20,
         'bb_std': 2.0
     }
+    # Add get_global_settings and get_timeframes if any old tests implicitly need them
+    config.get_global_settings.return_value = { C.CONFIG_STRATEGY: { C.CONFIG_STRATEGY_TYPE: "MACD"}}
+    config.get_timeframes.return_value = {"M15": "dummy"}
     return config

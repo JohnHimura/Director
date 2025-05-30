@@ -5,6 +5,12 @@ pandas==2.0.2
 ta==0.11.0
 matplotlib==3.7.1
 python-dotenv==1.0.0
+python-json-logger==2.0.7
+jsonschema==4.24.0
+attrs==25.3.0
+jsonschema-specifications==2025.4.1
+referencing==0.36.2
+rpds-py==0.25.1
 
 # Dependencias para pruebas
 pytest==7.3.1

@@ -7,6 +7,8 @@ from typing import Dict, List, Optional, Any, Union
 
 # Import from utility modules
 from .utils.error_handler import retry, safe_operation, ConnectionError, TimeoutError, OperationError, ValidationError
+from . import constants as C # Import constants
+from datetime import datetime # For paper trading ticket generation
 
 # Import MT5 with error handling
 try:
@@ -21,14 +23,22 @@ logger = logging.getLogger(__name__)
 class MT5TradingOperations:
     """Class for performing trading operations with MetaTrader 5."""
     
-    def __init__(self, connector):
+    def __init__(self, connector, is_kill_switch_active_func: Callable[[], bool]):
         """
         Initialize trading operations.
         
         Args:
             connector: MT5Connector instance
+            is_kill_switch_active_func: Callable that returns True if kill switch is active.
         """
         self.connector = connector
+        self.is_kill_switch_active = is_kill_switch_active_func # Store the function
+        # Access ConfigManager through the connector
+        self.config_manager = self.connector.config
+        global_settings = self.config_manager.get_global_settings()
+        self.paper_trading = global_settings.get(C.CONFIG_PAPER_TRADING, C.DEFAULT_PAPER_TRADING)
+        if self.paper_trading:
+            logger.info(f"{C.PAPER_TRADE_COMMENT_PREFIX.upper()} MODE ENABLED: No real orders will be sent to MT5.")
     
     @retry(max_retries=3, delay=1.0, exceptions=(ConnectionError, TimeoutError, OperationError))
     @safe_operation("open_position")
@@ -62,70 +72,104 @@ class MT5TradingOperations:
             ValidationError: If invalid parameters
             OperationError: If operation fails
         """
-        self.connector._ensure_connection()
-        
-        # Validate parameters
-        if order_type not in ['BUY', 'SELL']:
+        if self.is_kill_switch_active():
+            logger.critical("Kill switch is active. Open position operation aborted.")
+            # Return a structure similar to a failed trade or a specific kill switch status
+            return {
+                C.POSITION_TICKET: 0,
+                'retcode': -1, # Custom retcode for kill switch
+                C.REQUEST_COMMENT: "Operation aborted by kill switch",
+                'request': {}
+            }
+
+        # Validate parameters (common for both paper and real trading)
+        if order_type not in [C.ORDER_TYPE_BUY, C.ORDER_TYPE_SELL]:
             raise ValidationError(f"Invalid order type: {order_type}")
             
         if volume <= 0:
             raise ValidationError(f"Invalid volume: {volume}")
-            
-        # Determine order type
-        if order_type == 'BUY':
-            mt5_order_type = mt5.ORDER_TYPE_BUY
-            price_type = mt5.SYMBOL_TRADE_EXECUTION_MARKET
-        else:  # SELL
-            mt5_order_type = mt5.ORDER_TYPE_SELL
-            price_type = mt5.SYMBOL_TRADE_EXECUTION_MARKET
-            
-        # Get symbol info
-        symbol_info = self.connector.get_symbol_info(symbol)
+
+        # Determine MT5 order type for request structure (even for paper)
+        mt5_order_type_enum = mt5.ORDER_TYPE_BUY if order_type == C.ORDER_TYPE_BUY else mt5.ORDER_TYPE_SELL
+
+        # Get current price if not provided (common for logging in paper mode too)
+        # In a real scenario, for paper trading, we might want to simulate price fetching too.
+        # For now, assume price fetching is fine or use provided price.
+        current_market_price = price
+        if current_market_price is None:
+            # This part still needs MT5 connection for price, or needs to be simulated too.
+            # For simplicity, let's assume self.connector.get_symbol_price is okay for paper mode,
+            # or a price is provided.
+            try:
+                fetched_price_info = self.connector.get_symbol_price(symbol)
+                current_market_price = fetched_price_info['ask'] if order_type == C.ORDER_TYPE_BUY else fetched_price_info['bid']
+            except Exception as e:
+                logger.warning(f"{C.PAPER_TRADE_COMMENT_PREFIX}: Could not fetch live price for {symbol} due to {e}. Using 0.0.")
+                current_market_price = 0.0
+
+        request_params = {
+            C.REQUEST_SYMBOL: symbol,
+            C.REQUEST_VOLUME: volume,
+            C.REQUEST_TYPE: order_type,
+            C.REQUEST_PRICE: current_market_price,
+            C.REQUEST_SL: stop_loss,
+            C.REQUEST_TP: take_profit,
+            C.REQUEST_COMMENT: comment,
+            C.REQUEST_MAGIC: self.config_manager.get_global_settings().get(C.CONFIG_MAGIC_NUMBER, C.DEFAULT_MAGIC_NUMBER),
+        }
+
+        if self.paper_trading:
+            simulated_ticket = int(datetime.now().timestamp() * 1000)
+            log_msg = (f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating OPEN position: "
+                       f"Symbol={symbol}, Type={order_type}, Vol={volume}, Price={current_market_price}, "
+                       f"SL={stop_loss}, TP={take_profit}, Ticket={simulated_ticket}, Comment='{comment}'")
+            logger.info(log_msg)
+            return {
+                C.POSITION_TICKET: simulated_ticket,
+                'retcode': C.RETCODE_DONE,
+                C.REQUEST_COMMENT: f"{C.PAPER_TRADE_COMMENT_PREFIX} executed successfully",
+                'request': {**request_params, C.REQUEST_TYPE: mt5_order_type_enum, C.REQUEST_PRICE: current_market_price}
+            }
+
+        self.connector._ensure_connection()
         
-        # Get current price if not provided
-        if price is None:
-            current_price = self.connector.get_symbol_price(symbol)
-            price = current_price['ask'] if order_type == 'BUY' else current_price['bid']
-            
-        # Create order request
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": volume,
-            "type": mt5_order_type,
-            "price": price,
-            "sl": stop_loss,
-            "tp": take_profit,
-            "deviation": 10,
-            "magic": 123456,
-            "comment": comment,
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+        global_settings = self.config_manager.get_global_settings()
+        mt5_request = {
+            C.REQUEST_ACTION: mt5.TRADE_ACTION_DEAL,
+            C.REQUEST_SYMBOL: symbol,
+            C.REQUEST_VOLUME: volume,
+            C.REQUEST_TYPE: mt5_order_type_enum,
+            C.REQUEST_PRICE: current_market_price,
+            C.REQUEST_SL: stop_loss if stop_loss is not None else 0.0,
+            C.REQUEST_TP: take_profit if take_profit is not None else 0.0,
+            C.REQUEST_DEVIATION: global_settings.get(C.CONFIG_MAX_SLIPPAGE_POINTS, C.DEFAULT_MAX_SLIPPAGE_POINTS),
+            C.REQUEST_MAGIC: global_settings.get(C.CONFIG_MAGIC_NUMBER, C.DEFAULT_MAGIC_NUMBER),
+            C.REQUEST_COMMENT: comment,
+            C.REQUEST_TYPE_TIME: mt5.ORDER_TIME_GTC,
+            C.REQUEST_TYPE_FILLING: mt5.ORDER_FILLING_FOK,
         }
         
-        # Send order
         try:
-            result = mt5.order_send(request)
+            result = mt5.order_send(mt5_request)
             if result is None:
-                error = mt5.last_error()
-                raise OperationError(f"Failed to send order: {error}")
+                error_code = mt5.last_error()
+                raise OperationError(f"Failed to send order (result is None): MT5 Error Code {error_code}")
                 
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                raise OperationError(f"Order failed: {result.retcode} - {result.comment}")
+            if result.retcode != C.RETCODE_DONE: # Use constant for retcode
+                raise OperationError(f"Order failed: Code={result.retcode}, Comment='{result.comment}', Request Volume={result.request.volume if result.request else 'N/A'}")
                 
-            # Format the result
             order_result = {
-                'ticket': result.order,
+                C.POSITION_TICKET: result.order,
                 'retcode': result.retcode,
-                'comment': result.comment,
-                'request': request
+                C.REQUEST_COMMENT: result.comment,
+                'request': mt5_request
             }
             
-            logger.info(f"Order opened successfully: {order_result['ticket']}")
+            logger.info(f"{C.LOG_MSG_ORDER_OPENED}: Ticket={order_result[C.POSITION_TICKET]}, Symbol={symbol}, Type={order_type}, Vol={volume}")
             return order_result
         except Exception as e:
-            logger.error(f"Error opening position: {str(e)}")
-            raise OperationError(f"Error opening position: {str(e)}")
+            logger.error(f"Error opening position for {symbol}: {str(e)}")
+            raise OperationError(f"Error opening position for {symbol}: {str(e)}")
     
     @retry(max_retries=3, delay=1.0, exceptions=(ConnectionError, TimeoutError, OperationError))
     @safe_operation("close_position")
@@ -133,7 +177,8 @@ class MT5TradingOperations:
         self,
         ticket: int,
         volume: Optional[float] = None,
-        comment: str = ""
+        comment: str = "",
+        bypass_kill_switch: bool = False # New parameter
     ) -> Dict[str, Any]:
         """
         Close an existing position.
@@ -142,6 +187,7 @@ class MT5TradingOperations:
             ticket: Position ticket
             volume: Volume to close (if None, closes entire position)
             comment: Order comment
+            bypass_kill_switch: If True, allows operation even if kill switch is active.
             
         Returns:
             Dictionary with order result
@@ -151,72 +197,93 @@ class MT5TradingOperations:
             ValidationError: If invalid parameters
             OperationError: If operation fails
         """
+        if not bypass_kill_switch and self.is_kill_switch_active():
+            logger.critical(f"Kill switch is active. Close position operation for ticket {ticket} aborted.")
+            return {
+                C.POSITION_TICKET: ticket, # Original ticket
+                'retcode': -1, # Custom retcode for kill switch
+                C.REQUEST_COMMENT: "Operation aborted by kill switch",
+                'request': {}
+            }
+
+        if self.paper_trading:
+            log_msg = (f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating CLOSE position: "
+                       f"Ticket={ticket}, Volume={volume}, Comment='{comment}'")
+            logger.info(log_msg)
+            return {
+                C.POSITION_TICKET: int(datetime.now().timestamp() * 1000),
+                'retcode': C.RETCODE_DONE,
+                C.REQUEST_COMMENT: f"{C.PAPER_TRADE_COMMENT_PREFIX} close executed successfully",
+                'request': {'action': 'close', C.POSITION_TICKET: ticket, C.REQUEST_VOLUME: volume, C.REQUEST_COMMENT: comment}
+            }
+
         self.connector._ensure_connection()
         
-        # Get position details
         positions = mt5.positions_get(ticket=ticket)
-        
-        if positions is None or len(positions) == 0:
-            raise ValidationError(f"Position not found: {ticket}")
+        if not positions:
+            # Check if it was already closed or never existed
+            history_orders = mt5.history_deals_get(position=ticket) # ticket is position ID
+            history_orders = mt5.history_deals_get(position=ticket)
+            if history_orders and len(history_orders) > 0:
+                 logger.warning(f"Position {ticket} may have already been closed or is a historical order.")
+                 return {
+                    C.POSITION_TICKET: ticket,
+                    'retcode': C.RETCODE_DONE,
+                    C.REQUEST_COMMENT: "Position already closed or historical",
+                    # Using actual string keys for 'request' dict as it's for info/logging
+                    'request': {'action': 'close', 'ticket': ticket}
+                 }
+            raise ValidationError(f"Position with ticket {ticket} not found for closing.")
             
-        position = positions[0]._asdict()
+        position_data = positions[0]._asdict()
         
-        # Determine volume to close
-        close_volume = volume if volume is not None else position['volume']
+        close_volume = volume if volume is not None else position_data[C.POSITION_VOLUME]
         
-        if close_volume > position['volume']:
-            raise ValidationError(f"Close volume ({close_volume}) exceeds position volume ({position['volume']})")
+        if close_volume > position_data[C.POSITION_VOLUME]:
+            raise ValidationError(f"Close volume ({close_volume}) exceeds position volume ({position_data[C.POSITION_VOLUME]}) for ticket {ticket}")
             
-        # Determine order type (opposite of position type)
-        if position['type'] == mt5.POSITION_TYPE_BUY:
-            order_type = mt5.ORDER_TYPE_SELL
-        else:
-            order_type = mt5.ORDER_TYPE_BUY
+        mt5_order_type_to_close = mt5.ORDER_TYPE_SELL if position_data[C.POSITION_TYPE] == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
             
-        # Get price
-        symbol_info = self.connector.get_symbol_info(position['symbol'])
+        price_info = self.connector.get_symbol_price(position_data[C.POSITION_SYMBOL])
+        closing_price = price_info['bid'] if position_data[C.POSITION_TYPE] == mt5.POSITION_TYPE_BUY else price_info['ask']
         
-        current_price = self.connector.get_symbol_price(position['symbol'])
-        price = current_price['bid'] if position['type'] == mt5.POSITION_TYPE_BUY else current_price['ask']
-        
-        # Create order request
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": position['symbol'],
-            "volume": close_volume,
-            "type": order_type,
-            "position": ticket,
-            "price": price,
-            "deviation": 10,
-            "magic": position['magic'],
-            "comment": comment,
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+        global_settings = self.config_manager.get_global_settings()
+        mt5_request = {
+            C.REQUEST_ACTION: mt5.TRADE_ACTION_DEAL,
+            C.REQUEST_SYMBOL: position_data[C.POSITION_SYMBOL],
+            C.REQUEST_VOLUME: close_volume,
+            C.REQUEST_TYPE: mt5_order_type_to_close,
+            C.REQUEST_POSITION: ticket,
+            C.REQUEST_PRICE: closing_price,
+            C.REQUEST_DEVIATION: global_settings.get(C.CONFIG_MAX_SLIPPAGE_POINTS, C.DEFAULT_MAX_SLIPPAGE_POINTS),
+            C.REQUEST_MAGIC: position_data[C.POSITION_MAGIC],
+            C.REQUEST_COMMENT: comment,
+            C.REQUEST_TYPE_TIME: mt5.ORDER_TIME_GTC,
+            C.REQUEST_TYPE_FILLING: mt5.ORDER_FILLING_FOK,
         }
         
-        # Send order
         try:
-            result = mt5.order_send(request)
+            result = mt5.order_send(mt5_request)
             if result is None:
-                error = mt5.last_error()
-                raise OperationError(f"Failed to close position: {error}")
+                error_code = mt5.last_error()
+                raise OperationError(f"Failed to close position {ticket} (result is None): MT5 Error Code {error_code}")
                 
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                raise OperationError(f"Close position failed: {result.retcode} - {result.comment}")
+            if result.retcode != C.RETCODE_DONE:
+                raise OperationError(f"Close position {ticket} failed: Code={result.retcode}, Comment='{result.comment}'")
                 
-            # Format the result
             close_result = {
-                'ticket': result.order,
+                C.POSITION_TICKET: result.order,
+                'original_ticket': ticket,
                 'retcode': result.retcode,
-                'comment': result.comment,
-                'request': request
+                C.REQUEST_COMMENT: result.comment,
+                'request': mt5_request
             }
             
-            logger.info(f"Position closed successfully: {ticket}")
+            logger.info(f"Position {ticket} closed successfully by order {result.order}.")
             return close_result
         except Exception as e:
-            logger.error(f"Error closing position: {str(e)}")
-            raise OperationError(f"Error closing position: {str(e)}")
+            logger.error(f"Error closing position {ticket}: {str(e)}")
+            raise OperationError(f"Error closing position {ticket}: {str(e)}")
     
     @retry(max_retries=3, delay=1.0, exceptions=(ConnectionError, TimeoutError, OperationError))
     @safe_operation("modify_position")
@@ -242,49 +309,66 @@ class MT5TradingOperations:
             ValidationError: If invalid parameters
             OperationError: If operation fails
         """
+        if self.is_kill_switch_active():
+            logger.critical(f"Kill switch is active. Modify position operation for ticket {ticket} aborted.")
+            return {
+                C.POSITION_TICKET: ticket,
+                'retcode': -1, # Custom retcode for kill switch
+                C.REQUEST_COMMENT: "Operation aborted by kill switch",
+                'request': {}
+            }
+
+        if self.paper_trading:
+            log_msg = (f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating MODIFY position: "
+                       f"Ticket={ticket}, SL={stop_loss}, TP={take_profit}")
+            logger.info(log_msg)
+            return {
+                C.POSITION_TICKET: ticket,
+                'retcode': C.RETCODE_DONE,
+                C.REQUEST_COMMENT: f"{C.PAPER_TRADE_COMMENT_PREFIX} modify executed successfully",
+                'request': {'action': 'modify', C.POSITION_TICKET: ticket, C.REQUEST_SL: stop_loss, C.REQUEST_TP: take_profit}
+            }
+
         self.connector._ensure_connection()
         
-        # Get position details
         positions = mt5.positions_get(ticket=ticket)
-        
-        if positions is None or len(positions) == 0:
-            raise ValidationError(f"Position not found: {ticket}")
+        if not positions:
+            raise ValidationError(f"Position with ticket {ticket} not found for modification.")
             
-        position = positions[0]._asdict()
+        position_data = positions[0]._asdict()
         
-        # Set stop loss and take profit
-        sl = stop_loss if stop_loss is not None else position['sl']
-        tp = take_profit if take_profit is not None else position['tp']
-        
-        # Create order request
-        request = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "symbol": position['symbol'],
-            "position": ticket,
-            "sl": sl,
-            "tp": tp
+        sl_to_set = stop_loss if stop_loss is not None else position_data[C.POSITION_SL]
+        tp_to_set = take_profit if take_profit is not None else position_data[C.POSITION_TP]
+
+        if sl_to_set is None: sl_to_set = 0.0
+        if tp_to_set is None: tp_to_set = 0.0
+
+        mt5_request = {
+            C.REQUEST_ACTION: mt5.TRADE_ACTION_SLTP,
+            C.REQUEST_SYMBOL: position_data[C.POSITION_SYMBOL],
+            C.REQUEST_POSITION: ticket,
+            C.REQUEST_SL: sl_to_set,
+            C.REQUEST_TP: tp_to_set
         }
         
-        # Send order
         try:
-            result = mt5.order_send(request)
+            result = mt5.order_send(mt5_request)
             if result is None:
-                error = mt5.last_error()
-                raise OperationError(f"Failed to modify position: {error}")
+                error_code = mt5.last_error()
+                raise OperationError(f"Failed to modify position {ticket} (result is None): MT5 Error Code {error_code}")
                 
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                raise OperationError(f"Modify position failed: {result.retcode} - {result.comment}")
+            if result.retcode != C.RETCODE_DONE:
+                raise OperationError(f"Modify position {ticket} failed: Code={result.retcode}, Comment='{result.comment}'")
                 
-            # Format the result
             modify_result = {
-                'ticket': ticket,
+                C.POSITION_TICKET: ticket,
                 'retcode': result.retcode,
-                'comment': result.comment,
-                'request': request
+                C.REQUEST_COMMENT: result.comment,
+                'request': mt5_request
             }
             
-            logger.info(f"Position modified successfully: {ticket}")
+            logger.info(f"Position {ticket} modified successfully: SL={sl_to_set}, TP={tp_to_set}")
             return modify_result
         except Exception as e:
-            logger.error(f"Error modifying position: {str(e)}")
-            raise OperationError(f"Error modifying position: {str(e)}") 
+            logger.error(f"Error modifying position {ticket}: {str(e)}")
+            raise OperationError(f"Error modifying position {ticket}: {str(e)}")
