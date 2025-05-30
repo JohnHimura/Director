@@ -6,6 +6,7 @@ import logging
 import time
 import sys
 import json
+import uuid # Import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 import pandas as pd
@@ -13,16 +14,17 @@ import MetaTrader5 as mt5
 
 # Add the current directory to the path
 import os
-import sys
+from pathlib import Path # Import Path
+# import sys # sys is already imported above
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.config_manager import ConfigManager
-from core.logging_setup import setup_logging
+from core.logging_setup import setup_logging, get_log_context # Import get_log_context
 from core.mt5_connector import MT5Connector
 from core.strategy_engine import StrategyEngine, SignalType
 from core.risk_manager import RiskManager
+from core import constants as C
 
-# Initialize logging
 logger = logging.getLogger(__name__)
 
 class TradingBot:
@@ -35,15 +37,21 @@ class TradingBot:
         Args:
             config_path: Path to the configuration file
         """
-        # Load configuration
-        self.config = ConfigManager(config_path)
+        self.config_manager = ConfigManager(config_path)
         
+        # Kill switch state
+        self.kill_switch_activated = False
+        self._kill_switch_file_path_str = self.config_manager.get_global_settings().get(C.CONFIG_KILL_SWITCH_FILE_PATH, "KILL_SWITCH.txt")
+        self._kill_switch_file = Path(self._kill_switch_file_path_str)
+        self._kill_switch_close_positions = self.config_manager.get_global_settings().get(C.CONFIG_KILL_SWITCH_CLOSE_POSITIONS, True)
+
+
         # Initialize components
-        self.mt5 = MT5Connector(self.config)
-        self.strategy = StrategyEngine(self.config)
+        self.mt5 = MT5Connector(self.config_manager, self.is_kill_switch_active) # Pass callable
+        self.strategy = StrategyEngine(self.config_manager)
         
         # Get active symbols
-        self.symbols = self._get_active_symbols()
+        self.symbols = self._get_active_symbols() # This will use self.config_manager
         
         if not self.symbols:
             raise ValueError("No active symbols found in configuration")
@@ -52,14 +60,16 @@ class TradingBot:
         default_symbol = next(iter(self.symbols.keys()))
             
         self.risk_manager = RiskManager(
-            config=self.config.get_risk_params(default_symbol),
-            account_info=self._get_account_info()
+            config=self.config_manager.get_risk_params(default_symbol),
+            account_info=self._get_account_info(),
+            config_manager=self.config_manager, # Pass config_manager
+            symbol=default_symbol
         )
         
         # Trading state
         self.is_running = False
         self.last_update = None
-        self.timeframes = self.config.get_timeframes()
+        self.timeframes = self.config_manager.get_timeframes() # Use renamed config_manager
         
         # Initialize data cache
         self.data_cache = {}
@@ -127,9 +137,10 @@ class TradingBot:
             Dict where keys are symbol names and values are their configurations
         """
         active_symbols = {}
-        for symbol, config in self.config.get_active_symbols().items():
-            if config.get('enabled', False):
-                active_symbols[symbol] = config
+        # Use renamed config_manager and C.CONFIG_ENABLED
+        for symbol, config_data in self.config_manager.get_active_symbols().items():
+            if config_data.get(C.CONFIG_ENABLED, False):
+                active_symbols[symbol] = config_data
         return active_symbols
     
     def initialize(self) -> bool:
@@ -175,11 +186,78 @@ class TradingBot:
                     time.sleep(5)
                 
                 # Sleep for a bit before the next iteration
-                time.sleep(self.config.get_global_settings().get('loop_interval', 1))
+                loop_interval_val = self.config_manager.get_global_settings().get(C.CONFIG_LOOP_INTERVAL, 1)
+                time.sleep(loop_interval_val)
                 
         finally:
             self.stop()
-    
+
+    def _check_for_config_reload(self) -> None:
+        """Checks for configuration changes and applies them if necessary."""
+        # This function was added in a previous step, ensure its internal strings are constants
+        was_reloaded, changes = self.config_manager.check_and_reload_config()
+        if was_reloaded:
+            logger.info("Configuration reloaded. Applying changes...")
+            self._apply_reloaded_config(changes)
+
+    def _apply_reloaded_config(self, changes: Dict[str, Any]) -> None:
+        """Applies changes from a reloaded configuration."""
+        # This function was added in a previous step, ensure its internal strings are constants
+        restart_recommended = False
+
+        if C.RELOAD_CHANGES_LOGGING_LEVEL in changes:
+            new_level_str = changes[C.RELOAD_CHANGES_LOGGING_LEVEL]
+            setup_logging(config_manager=self.config_manager) # Re-setup with new config
+            logger.info(f"Logging setup re-initialized with new level: {new_level_str}")
+
+        if C.RELOAD_CHANGES_LOGGING_FILE_REQUIRES_RESTART in changes:
+            logger.warning("Logging file path changed. Restart is required to apply this change.")
+            restart_recommended = True
+
+        if C.RELOAD_CHANGES_GLOBAL_SETTINGS in changes:
+            logger.info(f"Global settings changed: {changes[C.RELOAD_CHANGES_GLOBAL_SETTINGS]}. RiskManager will be updated.")
+            if hasattr(self.risk_manager, 'update_config') and callable(getattr(self.risk_manager, 'update_config')):
+                 self.risk_manager.update_config()
+
+        if C.RELOAD_CHANGES_SYMBOLS in changes:
+            changed_symbols_data = changes[C.RELOAD_CHANGES_SYMBOLS]
+            logger.info(f"Symbol configurations changed: {json.dumps(changed_symbols_data)}")
+            active_symbols_refreshed = False
+            for symbol, sym_changes in changed_symbols_data.items():
+                if C.CONFIG_ENABLED in sym_changes:
+                    logger.info(f"Symbol {symbol} enabled status changed to {sym_changes[C.CONFIG_ENABLED]}.")
+                    self.symbols = self._get_active_symbols()
+                    active_symbols_refreshed = True
+                    if not sym_changes[C.CONFIG_ENABLED]:
+                        logger.info(f"Symbol {symbol} disabled. No new trades will be opened for it.")
+
+                if C.CONFIG_RISK in sym_changes:
+                    logger.info(f"Risk parameters updated for {symbol}.")
+                    if hasattr(self.risk_manager, 'update_config') and callable(getattr(self.risk_manager, 'update_config')):
+                        self.risk_manager.update_config(symbol=symbol)
+
+                if C.CONFIG_INDICATORS in sym_changes:
+                    logger.info(f"Indicator parameters updated for {symbol}. Strategy will use new values on next analysis.")
+                if C.CONFIG_SR in sym_changes:
+                    logger.info(f"SR parameters updated for {symbol}. Strategy will use new values on next analysis.")
+
+            if active_symbols_refreshed:
+                 logger.info(f"Active symbols list refreshed: {list(self.symbols.keys())}")
+
+        if hasattr(self.strategy, 'update_strategy_config'):
+            self.strategy.update_strategy_config()
+
+        critical_change_keys = [k for k in changes if "requires_restart" in k and k != C.RELOAD_CHANGES_LOGGING_FILE_REQUIRES_RESTART]
+        if critical_change_keys:
+            for key in critical_change_keys:
+                logger.warning(f"Critical configuration change detected: '{key}'. A manual bot restart is required to apply this.")
+            restart_recommended = True
+
+        if restart_recommended:
+            logger.warning("One or more configuration changes require a manual bot restart to take full effect.")
+        else:
+            logger.info("Hot-reload changes applied successfully.")
+
     def stop(self) -> None:
         """Stop the trading bot."""
         if not self.is_running:
@@ -191,11 +269,99 @@ class TradingBot:
     
     def _run_iteration(self) -> None:
         """Run one iteration of the trading loop."""
-        # Reset daily stats if it's a new day
+        # Set correlation ID for this iteration
+        log_ctx = get_log_context()
+        log_ctx.correlation_id = str(uuid.uuid4())
+
+        try:
+            self._check_for_config_reload()
+            self._check_kill_switch() # Check kill switch status
+
+            if self.kill_switch_activated:
+                logger.critical(f"KILL SWITCH ACTIVE. File: {self._kill_switch_file_path_str}. No new trades will be initiated. Bot may be in a safe, monitoring-only mode or will stop if configured.")
+                # Optional: Implement logic to stop the bot or enter a minimal monitoring loop here
+                # For now, it will prevent new trades via _check_for_entries and trading_operations checks.
+                # If kill_switch_close_positions was true, positions would have been closed by _check_kill_switch.
+                return # Skip the rest of the iteration's trading logic
+
+            current_date = datetime.now().date()
+            if self.last_reset_date != current_date:
+                logger.info("New trading day detected. Resetting daily risk statistics.")
+                if hasattr(self.risk_manager, 'reset_daily_stats'):
+                    self.risk_manager.reset_daily_stats()
+                self.last_reset_date = current_date
+
+            # Update account info
+            account_info = self._get_account_info()
+            if hasattr(self.risk_manager, 'update_account_info'):
+                self.risk_manager.update_account_info(account_info)
+
+            # Check if we can trade - ensure risk_manager is updated with latest config for limits
+            can_trade, reason = True, "" # Default
+            if hasattr(self.risk_manager, 'check_daily_limits'):
+                can_trade, reason = self.risk_manager.check_daily_limits()
+
+            if not can_trade:
+                logger.warning("Trading limited: %s", reason)
+                return
+
+            # Process each symbol
+            for symbol_name, symbol_config_dict in self.symbols.items():
+                # Use C.CONFIG_ENABLED
+                if symbol_config_dict.get(C.CONFIG_ENABLED, False):
+                    try:
+                        self._process_symbol(symbol_name, symbol_config_dict)
+                    except Exception as e:
+                        logger.exception("Error processing symbol %s", symbol_name)
+        finally:
+            # Clear correlation_id at the end of the iteration (optional, good practice)
+            if hasattr(log_ctx, 'correlation_id'):
+                del log_ctx.correlation_id
+
+    def is_kill_switch_active(self) -> bool:
+        """Returns the current state of the kill switch."""
+        return self.kill_switch_activated
+
+    def _check_kill_switch(self) -> None:
+        """Checks for the kill switch file and takes action if found."""
+        if self.kill_switch_activated: # Already activated, no need to re-check file or re-close
+            return
+
+        if self._kill_switch_file.exists():
+            self.kill_switch_activated = True
+            logger.critical(f"KILL SWITCH ACTIVATED by file: {self._kill_switch_file_path_str}")
+
+            if self._kill_switch_close_positions:
+                logger.info("Kill switch: Attempting to close all open positions.")
+                try:
+                    # Pass a special flag to allow closing even if kill switch is generally blocking operations
+                    open_positions, _, _ = self.mt5.get_open_positions(bypass_kill_switch=True)
+                    if open_positions:
+                        for position_dict in open_positions:
+                            ticket = position_dict[C.POSITION_TICKET]
+                            symbol = position_dict[C.POSITION_SYMBOL]
+                            logger.info(f"Kill switch: Closing position {ticket} for {symbol}.")
+                            # Pass bypass_kill_switch=True to ensure close operation goes through
+                            close_result = self.mt5.close_position(ticket, bypass_kill_switch=True)
+                            if close_result and close_result.get('retcode') == C.RETCODE_DONE:
+                                logger.info(f"Kill switch: Successfully closed position {ticket}.")
+                            else:
+                                logger.error(f"Kill switch: Failed to close position {ticket}. Result: {close_result}")
+                    else:
+                        logger.info("Kill switch: No open positions found to close.")
+                except Exception as e:
+                    logger.exception(f"Kill switch: Error during closing of positions: {e}")
+
+            # Optional: Add logic here to stop the bot completely if desired
+            # self.stop()
+            # self.is_running = False # To break the main loop in start()
+
+    def _old_run_iteration_content(self) -> None:
         current_date = datetime.now().date()
         if self.last_reset_date != current_date:
             logger.info("New trading day detected. Resetting daily risk statistics.")
-            self.risk_manager.reset_daily_stats()
+            if hasattr(self.risk_manager, 'reset_daily_stats'):
+                self.risk_manager.reset_daily_stats()
             self.last_reset_date = current_date
             
         # Update account info
@@ -210,8 +376,11 @@ class TradingBot:
         
         # Process each symbol
         for symbol_name, symbol_config_dict in self.symbols.items():
-            if symbol_config_dict.get('enabled', False):
+            # Use C.CONFIG_ENABLED
+            if symbol_config_dict.get(C.CONFIG_ENABLED, False):
                 try:
+                    # Call _check_for_config_reload() before processing each symbol or less frequently
+                    # For now, it's in the main loop, called once per bot iteration.
                     self._process_symbol(symbol_name, symbol_config_dict)
                 except Exception as e:
                     logger.exception("Error processing symbol %s", symbol_name)
@@ -246,9 +415,11 @@ class TradingBot:
         # Obtener todas las posiciones abiertas para el RiskManager
         current_open_positions_list, _, _ = self.mt5.get_open_positions()
         
-        if not positions_list:  # Solo abrir nuevas posiciones si no hay abiertas para este símbolo
-            # Pasamos la lista completa de posiciones abiertas al risk_manager
-            self._check_for_entries(symbol, data, symbol_config, current_open_positions_list)
+        if not positions_list:
+            if self.kill_switch_activated:
+                logger.warning(f"Kill switch active, skipping new entry check for {symbol}.")
+            else:
+                self._check_for_entries(symbol, data, symbol_config, current_open_positions_list)
     
     def _get_market_data(self, symbol: str) -> Dict[str, pd.DataFrame]:
         """
@@ -300,8 +471,7 @@ class TradingBot:
             try:
                 self._manage_position(position, data)
             except Exception as e:
-                # Acceder a ticket como clave de diccionario para el log
-                position_ticket = position.get('ticket', 'N/A')
+                position_ticket = position.get(C.POSITION_TICKET, 'N/A') # Use C.POSITION_TICKET
                 logger.exception("Error managing position %s", position_ticket)
     
     def _manage_position(self, position: Dict[str, Any], data: Dict[str, pd.DataFrame]) -> None:
@@ -309,19 +479,18 @@ class TradingBot:
         Manage a single open position.
         
         Args:
-            position: Position to manage (dictionary)
+            position: Position to manage (dictionary from MT5 position._asdict())
             data: Market data for the symbol
         """
-        # Get current price
-        symbol = position['symbol'] # Acceder a symbol como clave
+        symbol = position[C.POSITION_SYMBOL]
         
-        # Acceder a type como clave
         symbol_info = mt5.symbol_info(symbol)
         if symbol_info is None:
             logger.error("Could not get symbol info for %s", symbol)
             return
-            
-        current_price = symbol_info.ask if position['type'] == 'BUY' else symbol_info.bid
+
+        # position[C.POSITION_TYPE] should be mt5.POSITION_TYPE_BUY (0) or mt5.POSITION_TYPE_SELL (1)
+        current_price = symbol_info.ask if position[C.POSITION_TYPE] == mt5.POSITION_TYPE_BUY else symbol_info.bid
         
         # Check if we should close the position
         close_signal = self._check_exit_signals(position, data, current_price)
@@ -353,31 +522,44 @@ class TradingBot:
             Reason for exit, or None if should not exit
         """
         # Check stop loss and take profit
-        # Acceder a type, sl, tp como claves
-        if position['type'] == 'BUY':
-            if current_price <= position['sl'] or current_price >= position['tp']:
+        # position[C.POSITION_TYPE] is 0 for BUY, 1 for SELL (MT5 constants)
+        # position[C.POSITION_SL] and position[C.POSITION_TP]
+        if position[C.POSITION_TYPE] == mt5.POSITION_TYPE_BUY:
+            if (position[C.POSITION_SL] != 0 and current_price <= position[C.POSITION_SL]) or \
+               (position[C.POSITION_TP] != 0 and current_price >= position[C.POSITION_TP]):
                 return "SL/TP hit"
-        else:  # sell
-            if current_price >= position['sl'] or current_price <= position['tp']:
+        elif position[C.POSITION_TYPE] == mt5.POSITION_TYPE_SELL:
+            if (position[C.POSITION_SL] != 0 and current_price >= position[C.POSITION_SL]) or \
+               (position[C.POSITION_TP] != 0 and current_price <= position[C.POSITION_TP]):
                 return "SL/TP hit"
         
         # Check strategy exit signals
+        # Map MT5 position type to strategy's expected SignalType if they differ
+        # Assuming strategy expects SignalType.BUY (1) or SignalType.SELL (-1)
+        # MT5 POSITION_TYPE_BUY is 0, POSITION_TYPE_SELL is 1. This needs careful mapping.
+        # For now, assuming strategy's position_info['position_type'] takes these MT5 int constants.
+        # This was handled in StrategyEngine._check_exit_signal to compare with SignalType enum.
+        # Let's ensure the position_info dict passed to analyze() uses consistent types.
+        # The current MACDStrategy's _check_exit_signal expects position_info['position_type'] to be SignalType.BUY/SELL
+
+        strat_pos_type = SignalType.BUY if position[C.POSITION_TYPE] == mt5.POSITION_TYPE_BUY else SignalType.SELL
+
         analysis = self.strategy.analyze(
-            symbol=position['symbol'], # Acceder a symbol como clave
+            symbol=position[C.POSITION_SYMBOL],
             data=data,
             position_info={
-                'position_type': position['type'], # Acceder a type como clave
-                'entry_price': position['open_price'], # Acceder a open_price como clave
-                'stop_loss': position['sl'], # Acceder a sl como clave
-                'take_profit': position['tp'], # Acceder a tp como clave
-                'current_price': current_price
+                C.POSITION_TYPE: strat_pos_type, # Pass SignalType enum value
+                C.POSITION_OPEN_PRICE: position[C.POSITION_OPEN_PRICE],
+                C.POSITION_SL: position[C.POSITION_SL],
+                C.POSITION_TP: position[C.POSITION_TP],
+                'current_price': current_price # This key is fine as string for strategy internal use
             }
         )
         
-        # Acceder a type como clave
-        if (position['type'] == 'BUY' and analysis['signal'] == SignalType.SELL) or \
-           (position['type'] == 'SELL' and analysis['signal'] == SignalType.BUY):
-            return analysis.get('message', 'Strategy exit signal')
+        # analysis['signal'] is from SignalType enum
+        if (strat_pos_type == SignalType.BUY and analysis['signal'] == SignalType.SELL) or \
+           (strat_pos_type == SignalType.SELL and analysis['signal'] == SignalType.BUY):
+            return analysis.get('message', 'Strategy exit signal') # 'message' is fine as string key
         
         return None
     
@@ -386,49 +568,49 @@ class TradingBot:
         Close a position.
         
         Args:
-            position: Position to close (dictionary)
+            position: Position to close (dictionary from MT5 position._asdict())
             reason: Reason for closing
         """
-        # Acceder a ticket como clave para el log y la llamada a close_position
-        logger.info("Closing position %s: %s", position['ticket'], reason)
+        position_ticket = position[C.POSITION_TICKET]
+        logger.info(f"Closing position {position_ticket}: {reason}")
         
-        # Close the position
-        result = self.mt5.close_position(position['ticket']) # Acceder a ticket como clave
+        result = self.mt5.close_position(position_ticket)
         
-        if result.retcode != 10009:  # MT5.TRADE_RETCODE_DONE
-            # Acceder a ticket como clave para el log
-            logger.error("Failed to close position %s: %s", position['ticket'], result.comment)
+        if result.get('retcode') != C.RETCODE_DONE:
+            logger.error(f"Failed to close position {position_ticket}: {result.get(C.REQUEST_COMMENT)}")
     
     def _check_move_to_break_even(self, position: Dict[str, Any], current_price: float) -> None:
         """
         Check if we should move stop loss to break even.
         
         Args:
-            position: Position to check (dictionary)
+            position: Position to check (dictionary from MT5 position._asdict())
             current_price: Current market price
         """
-        # Get symbol info for point value
-        # Acceder a symbol como clave
-        symbol_info = mt5.symbol_info(position['symbol'])
+        symbol = position[C.POSITION_SYMBOL]
+        symbol_info = mt5.symbol_info(symbol)
         if not symbol_info:
-            logger.error("Could not get symbol info for %s in break even check", position['symbol'])
+            logger.error(f"Could not get symbol info for {symbol} in break even check")
             return
         
-        # Calculate price move in points
-        # Acceder a type, price_open, sl como claves
-        if position['type'] == 'BUY':
-            price_move = (current_price - position['open_price']) / symbol_info.point
-            if price_move >= 50:  # 50 points in profit
-                # Move SL to break even + spread
-                new_sl = position['open_price'] + (symbol_info.spread * symbol_info.point)
-                if new_sl > position['sl']:  # Only move SL up. Acceder a sl como clave
+        position_type = position[C.POSITION_TYPE] # MT5 constant
+        open_price = position[C.POSITION_OPEN_PRICE]
+        current_sl = position[C.POSITION_SL]
+
+        # TODO: Make '50' points and spread factor configurable through constants or config
+        points_threshold = 50
+
+        if position_type == mt5.POSITION_TYPE_BUY:
+            price_move = (current_price - open_price) / symbol_info.point
+            if price_move >= points_threshold:
+                new_sl = open_price + (symbol_info.spread * symbol_info.point)
+                if new_sl > current_sl:
                     self._modify_position(position, sl=new_sl)
-        else:  # sell
-            price_move = (position['open_price'] - current_price) / symbol_info.point
-            if price_move >= 50:  # 50 points in profit
-                # Move SL to break even - spread
-                new_sl = position['open_price'] - (symbol_info.spread * symbol_info.point)
-                if new_sl < position['sl'] or position['sl'] == 0:  # Only move SL down. Acceder a sl como clave
+        else: # SELL
+            price_move = (open_price - current_price) / symbol_info.point
+            if price_move >= points_threshold:
+                new_sl = open_price - (symbol_info.spread * symbol_info.point)
+                if new_sl < current_sl or current_sl == 0:
                     self._modify_position(position, sl=new_sl)
     
     def _check_trailing_stop(
@@ -446,20 +628,23 @@ class TradingBot:
             data: Market data for the symbol
         """
         # Get ATR for trailing stop distance
-        atr = self._get_atr(data)
-        if atr is None:
+        # TODO: Make ATR multiplier configurable
+        atr_multiplier_for_trailing = 2.0
+        atr = self._get_atr(data) # ATR period is default 14 in _get_atr
+        if atr is None or atr == 0: # Also check if ATR is zero
             return
         
-        # Calculate new stop loss
-        # Acceder a type, sl como claves
-        if position['type'] == 'BUY':
-            new_sl = current_price - (atr * 2)  # 2 * ATR trailing stop
-            if new_sl > position['sl']:  # Only move SL up. Acceder a sl como clave
+        position_type = position[C.POSITION_TYPE] # MT5 constant
+        current_sl = position[C.POSITION_SL]
+
+        if position_type == mt5.POSITION_TYPE_BUY:
+            new_sl = current_price - (atr * atr_multiplier_for_trailing)
+            if new_sl > current_sl:
                 self._modify_position(position, sl=new_sl)
-        else:  # sell
-            new_sl = current_price + (atr * 2)  # 2 * ATR trailing stop
-            if new_sl < position['sl'] or position['sl'] == 0:  # Only move SL down. Acceder a sl como clave
-                    self._modify_position(position, sl=new_sl)
+        else: # SELL
+            new_sl = current_price + (atr * atr_multiplier_for_trailing)
+            if new_sl < current_sl or current_sl == 0:
+                self._modify_position(position, sl=new_sl)
     
     def _get_atr(self, data: Dict[str, pd.DataFrame], period: int = 14) -> Optional[float]:
         """
@@ -467,31 +652,45 @@ class TradingBot:
         
         Args:
             data: Market data for the symbol
-            period: ATR period
+            period: ATR period, default from risk config or global if not passed
             
         Returns:
             ATR value or None if not available
         """
         # Try to get ATR from the primary timeframe
-        primary_tf = self.config.get_timeframes()[0]  # First timeframe is primary
+        # TODO: Make primary_tf selection more robust, perhaps from config
+        timeframes_list = list(self.config_manager.get_timeframes().keys())
+        if not timeframes_list:
+            logger.warning("No timeframes configured for ATR.")
+            return None
+        primary_tf = timeframes_list[0]
+
         if primary_tf in data and not data[primary_tf].empty:
             df = data[primary_tf]
-            if len(df) >= period + 1:
+            # Ensure indicator_period is valid
+            atr_period_from_config = self.config_manager.get_indicator_params(df.name if hasattr(df,'name') else '').get(C.CONFIG_INDICATOR_ATR_PERIOD, period)
+
+            if len(df) >= atr_period_from_config + 1:
                 # Calculate ATR if not already present
-                if 'ATR' not in df.columns:
-                    high = df['high']
-                    low = df['low']
-                    close = df['close']
+                if C.INDICATOR_ATR not in df.columns: # Use constant
+                    # Ensure column names are lowercase as per IndicatorCalculator convention potentially
+                    high_col = 'high' if 'high' in df.columns else 'High'
+                    low_col = 'low' if 'low' in df.columns else 'Low'
+                    close_col = 'close' if 'close' in df.columns else 'Close'
+
+                    high = df[high_col]
+                    low = df[low_col]
+                    close = df[close_col]
                     
                     tr1 = high - low
                     tr2 = abs(high - close.shift())
                     tr3 = abs(low - close.shift())
                     
                     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                    atr = tr.rolling(window=period).mean()
-                    df['ATR'] = atr
+                    atr_series = tr.rolling(window=atr_period_from_config).mean()
+                    df[C.INDICATOR_ATR] = atr_series # Use constant
                 
-                return df['ATR'].iloc[-1]
+                return df[C.INDICATOR_ATR].iloc[-1]
         
         return None
     
@@ -508,27 +707,22 @@ class TradingBot:
         if sl is None and tp is None:
             return
         
+        position_ticket = position[C.POSITION_TICKET]
         # Use current values if not provided
-        # Acceder a sl, tp como claves
-        if sl is None:
-            sl = position['sl']
-        if tp is None:
-            tp = position['tp']
+        new_sl = sl if sl is not None else position[C.POSITION_SL]
+        new_tp = tp if tp is not None else position[C.POSITION_TP]
         
         # Modify the position
-        # Acceder a ticket como clave
         result = self.mt5.modify_position(
-            ticket=position['ticket'],
-            sl=sl,
-            tp=tp
+            ticket=position_ticket,
+            sl=new_sl,
+            tp=new_tp
         )
         
-        if result.retcode != 10009:  # MT5.TRADE_RETCODE_DONE
-            # Acceder a ticket como clave para el log
-            logger.error("Failed to modify position %s: %s", position['ticket'], result.comment)
+        if result.get('retcode') != C.RETCODE_DONE:
+            logger.error(f"Failed to modify position {position_ticket}: {result.get(C.REQUEST_COMMENT)}")
         else:
-            # Acceder a ticket como clave para el log
-            logger.info("Modified position %s: SL=%.5f, TP=%.5f", position['ticket'], sl, tp)
+            logger.info(f"Modified position {position_ticket}: SL={new_sl}, TP={new_tp}")
     
     def _check_for_entries(
         self,
@@ -559,67 +753,77 @@ class TradingBot:
             return
         
         # Analyze the market
-        analysis = self.strategy.analyze(symbol, data)
+        # Pass None for position_info as we are checking for new entries
+        analysis = self.strategy.analyze(symbol, data, position_info=None)
         
-        # Check for entry signals
-        if analysis['signal'] == SignalType.NONE:
+        signal_type = analysis.get('signal', SignalType.NONE) # 'signal' is fine as string key
+        if signal_type == SignalType.NONE:
             return
         
         # Get current price
         symbol_info = mt5.symbol_info(symbol)
         if not symbol_info:
-            logger.error("Could not get symbol info for %s in entry check", symbol)
+            logger.error(f"Could not get symbol info for {symbol} in entry check")
             return
         
-        current_price = symbol_info.ask if analysis['signal'] == SignalType.BUY else symbol_info.bid
+        current_price = symbol_info.ask if signal_type == SignalType.BUY else symbol_info.bid
         
         # Calculate position size
-        position_size = self.risk_manager.calculate_position_size(
+        # analysis.get('stop_loss') uses string key 'stop_loss' from StrategyResult.to_dict()
+        stop_loss_price = analysis.get(C.POSITION_SL, 0.0) # Use constant if defined for StrategyResult keys
+
+        position_size_details = self.risk_manager.calculate_position_size(
             symbol=symbol,
             entry_price=current_price,
-            # La stop loss se obtiene del resultado del análisis de estrategia
-            stop_loss=analysis.get('stop_loss', 0),
-            risk_amount=None  # Usar porcentaje de riesgo por defecto
+            stop_loss=stop_loss_price,
+            risk_amount=None
         )
         
-        if position_size['lot_size'] <= 0:
-            logger.warning("Invalid position size for %s", symbol)
+        calculated_lot_size = position_size_details.get(C.LOT_SIZE, 0.0) # Use constant
+        if calculated_lot_size <= 0:
+            logger.warning(f"Invalid position size ({calculated_lot_size}) for {symbol}")
             return
         
-        # Place the order
-        order_type = 'buy' if analysis['signal'] == SignalType.BUY else 'sell'
+        order_type_str = C.ORDER_TYPE_BUY if signal_type == SignalType.BUY else C.ORDER_TYPE_SELL
         
-        result = self.mt5.place_order(
+        # analysis.get('take_profit') uses string key 'take_profit'
+        take_profit_price = analysis.get(C.POSITION_TP, 0.0) # Use constant
+        message = analysis.get('message', '') # 'message' is fine as string key
+
+        result = self.mt5.place_order( # This calls MT5Connector -> MT5TradingOperations
             symbol=symbol,
-            order_type=order_type,
-            lot_size=position_size['lot_size'],
-            # La stop loss y take profit se obtienen del resultado del análisis de estrategia
-            sl=analysis.get('stop_loss', 0),
-            tp=analysis.get('take_profit', 0),
-            comment=f"Auto {order_type.capitalize()}: {analysis.get('message', '')}"
+            order_type=order_type_str, # Pass 'BUY' or 'SELL' string
+            lot_size=calculated_lot_size,
+            sl=stop_loss_price,
+            tp=take_profit_price,
+            comment=f"Auto {order_type_str.capitalize()}: {message}"
         )
         
-        if result.retcode == 10009:  # MT5.TRADE_RETCODE_DONE
-            logger.info("Placed %s order for %s: Lots=%.2f, SL=%.5f, TP=%.5f", 
-                       order_type.upper(), symbol, position_size['lot_size'], 
-                       analysis.get('stop_loss', 0), analysis.get('take_profit', 0))
+        if result.get('retcode') == C.RETCODE_DONE: # Use constant for retcode
+            logger.info(f"Placed {order_type_str.upper()} order for {symbol}: "
+                       f"Lots={calculated_lot_size:.2f}, SL={stop_loss_price:.5f}, TP={take_profit_price:.5f}")
             
-            # Update risk manager
-            self.risk_manager.update_trade_count()
+            if hasattr(self.risk_manager, 'update_trade_count'):
+                 self.risk_manager.update_trade_count()
         else:
-            logger.error("Failed to place %s order for %s: %s", 
-                        order_type.upper(), symbol, result.comment)
+            logger.error(f"Failed to place {order_type_str.upper()} order for {symbol}: {result.get(C.REQUEST_COMMENT)}")
 
 def main():
     """Main entry point for the trading bot."""
-    # Set up logging
-    setup_logging()
+    # Logging is setup after ConfigManager is initialized in TradingBot
+    # logger.info("Starting trading bot...") # Moved after logging setup
     
-    logger.info("Starting trading bot...")
-    
+    bot = None
     try:
-        # Create and start the bot
         bot = TradingBot()
+        # Logging setup is now inside TradingBot's _apply_reloaded_config or after its init
+        # For initial setup before any potential reload, it's done in TradingBot constructor phase
+        # if not hasattr(bot, 'config_manager') or bot.config_manager is None:
+        #      logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        #      logger.critical("ConfigManager not available in TradingBot for main. Logging setup with basic config.")
+        # else:
+        #      setup_logging(config_manager=bot.config_manager)
+        # logger.info("Trading bot application started.") # Now logger is configured
         
         if not bot.initialize():
             logger.error("Failed to initialize trading bot")

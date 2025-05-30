@@ -11,7 +11,11 @@
     "max_total_trades": 5,
     "max_slippage_pips": 3.0,
     "magic_number": 123456,
-    "deviation": 10
+    "deviation": 10, # This might be deprecated or used for other purposes now
+    "paper_trading": true,
+    "max_slippage_points": 10,
+    "kill_switch_file_path": "KILL_SWITCH.txt",
+    "kill_switch_close_positions": true
   },
   "logging": {
     "level": "DEBUG",

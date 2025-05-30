@@ -11,11 +11,26 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 import traceback
+import threading # Import threading
 
 from .utils.error_handler import retry, safe_operation
 from .config_manager import ConfigManager, ConfigError
+from . import constants as C # Import constants
+from pythonjsonlogger import jsonlogger # Import JsonFormatter
 
 logger = logging.getLogger(__name__)
+
+# Create a thread-local context for storing correlation_id
+_log_context = threading.local()
+
+class ContextFilter(logging.Filter):
+    """
+    A logging filter that injects context information (e.g., correlation_id)
+    into the log record.
+    """
+    def filter(self, record):
+        record.correlation_id = getattr(_log_context, 'correlation_id', 'N/A') # Default to N/A if not set
+        return True
 
 class LoggerManager:
     """Manager class for logger configuration and operations."""
@@ -40,55 +55,71 @@ class LoggerManager:
         """
         try:
             # Load configuration
-            config = ConfigManager(config_path)
-            self.log_config = config.get_logging_config()
+            # config_path can also be a ConfigManager instance if already initialized
+            if isinstance(config_path, ConfigManager):
+                config = config_path
+            else:
+                config = ConfigManager(config_path)
+            self.log_config = config.get_logging_config() # This returns a dict
             
             # Ensure log directory exists
-            log_file = Path(self.log_config.get("file", "logs/trading_bot.log"))
+            default_log_file = Path(C.LOGS_DIR) / "trading_bot.log" # Use constant for dir
+            log_file = Path(self.log_config.get(C.CONFIG_LOGGING_FILE, default_log_file))
             log_dir = log_file.parent
             log_dir.mkdir(parents=True, exist_ok=True)
             
-            # Create log formatter
-            formatter = logging.Formatter(
-                fmt=self.log_config.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
-                datefmt=self.log_config.get("datefmt", "%Y-%m-%d %H:%M:%S")
+            # Get format and datefmt from config, or use defaults
+            # Add correlation_id to the default format string
+            default_format_str = "%(asctime)s %(levelname)s %(name)s %(correlation_id)s %(module)s %(funcName)s %(lineno)d %(message)s"
+            log_format_str = self.log_config.get(C.CONFIG_LOGGING_FORMAT, default_format_str)
+            date_format_str = self.log_config.get("datefmt", "%Y-%m-%d %H:%M:%S")
+
+            # Create JsonFormatter
+            formatter = jsonlogger.JsonFormatter(
+                fmt=log_format_str,
+                datefmt=date_format_str,
+                rename_fields={"levelname": "level", "asctime": "timestamp"}
             )
+
+            # Create and add context filter
+            context_filter = ContextFilter()
             
             # Configure root logger
-            self.root_logger.setLevel(logging.DEBUG)  # Set root to lowest level
+            self.root_logger.setLevel(logging.DEBUG)
             
-            # Clear existing handlers
             for handler in self.root_logger.handlers[:]:
                 self.root_logger.removeHandler(handler)
             
-            # Add console handler
             console_handler = logging.StreamHandler()
-            console_level = self._get_log_level(self.log_config.get("console_level", "INFO"))
+            console_level_str = self.log_config.get("console_level", C.DEFAULT_LOGGING_LEVEL)
+            console_level = self._get_log_level(console_level_str)
             console_handler.setLevel(console_level)
             console_handler.setFormatter(formatter)
+            console_handler.addFilter(context_filter) # Add filter to handler
             self.root_logger.addHandler(console_handler)
             self.handlers["console"] = console_handler
             
-            # Add file handler
             file_handler = logging.handlers.RotatingFileHandler(
                 filename=log_file,
-                maxBytes=self.log_config.get("max_bytes", 10*1024*1024),  # 10MB default
-                backupCount=self.log_config.get("backup_count", 5),
+                maxBytes=self.log_config.get(C.CONFIG_LOGGING_MAX_BYTES, 10*1024*1024),
+                backupCount=self.log_config.get(C.CONFIG_LOGGING_BACKUP_COUNT, 5),
                 encoding='utf-8'
             )
-            file_level = self._get_log_level(self.log_config.get("file_level", "DEBUG"))
+            file_level_str = self.log_config.get("file_level", C.DEFAULT_LOGGING_LEVEL)
+            file_level = self._get_log_level(file_level_str)
             file_handler.setLevel(file_level)
             file_handler.setFormatter(formatter)
+            file_handler.addFilter(context_filter) # Add filter to handler
             self.root_logger.addHandler(file_handler)
             self.handlers["file"] = file_handler
             
-            # Configure module-specific log levels
+            # "module_levels" is not a standard constant
             module_levels = self.log_config.get("module_levels", {})
             for module_name, level in module_levels.items():
                 self.set_module_log_level(module_name, level)
             
-            # Set global log level
-            root_level = self._get_log_level(self.log_config.get("level", "INFO"))
+            root_level_str = self.log_config.get(C.CONFIG_LOGGING_LEVEL, C.DEFAULT_LOGGING_LEVEL)
+            root_level = self._get_log_level(root_level_str)
             self.root_logger.setLevel(root_level)
             
             self.initialized = True
@@ -199,11 +230,21 @@ class LoggerManager:
             level_value = self._get_log_level(level)
             handler.setLevel(level_value)
             
-            formatter = logging.Formatter(
-                fmt=self.log_config.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
-                datefmt=self.log_config.get("datefmt", "%Y-%m-%d %H:%M:%S")
+            # Create a JsonFormatter for the new handler
+            default_format_str_dynamic = "%(asctime)s %(levelname)s %(name)s %(correlation_id)s %(module)s %(funcName)s %(lineno)d %(message)s"
+            log_format_str = self.log_config.get(C.CONFIG_LOGGING_FORMAT, default_format_str_dynamic)
+            date_format_str = self.log_config.get("datefmt", "%Y-%m-%d %H:%M:%S")
+
+            current_formatter = jsonlogger.JsonFormatter(
+                fmt=log_format_str,
+                datefmt=date_format_str,
+                rename_fields={"levelname": "level", "asctime": "timestamp"}
             )
-            handler.setFormatter(formatter)
+            handler.setFormatter(current_formatter)
+
+            # Add context filter to the new handler as well
+            context_filter = ContextFilter()
+            handler.addFilter(context_filter)
             
             # Add to root logger
             self.root_logger.addHandler(handler)
@@ -232,14 +273,23 @@ class LoggerManager:
 # Create a singleton instance
 logger_manager = LoggerManager()
 
-def setup_logging(config_path: str = "config.json") -> None:
+# Allow passing ConfigManager instance directly to setup_logging
+# Also, make _log_context accessible for main_bot to set it.
+def get_log_context():
+    return _log_context
+
+def setup_logging(config_manager: Optional[ConfigManager] = None, config_path: str = "config.json") -> None:
     """
-    Configure logging based on the configuration file.
+    Configure logging.
     
     Args:
-        config_path: Path to the configuration file
+        config_manager: Optional ConfigManager instance.
+        config_path: Path to the configuration file, used if config_manager is None.
     """
-    logger_manager.setup_logging(config_path)
+    if config_manager:
+        logger_manager.setup_logging(config_path=config_manager)
+    else:
+        logger_manager.setup_logging(config_path=config_path)
 
 def set_global_log_level(level: Union[str, int]) -> None:
     """

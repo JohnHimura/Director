@@ -1,0 +1,143 @@
+{
+  "type": "object",
+  "properties": {
+    "metatrader5": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string"},
+        "server": {"type": "string"},
+        "login": {"type": "integer"},
+        "password": {"type": "string"},
+        "timeout": {"type": "integer"},
+        "portable": {"type": "boolean"}
+      },
+      "required": ["path", "server", "login", "password", "timeout", "portable"]
+    },
+    "global_settings": {
+      "type": "object",
+      "properties": {
+        "max_total_trades": {"type": "integer"},
+        "max_slippage_pips": {"type": "number"},
+        "magic_number": {"type": "integer"},
+        "deviation": {"type": "integer"},
+        "paper_trading": {"type": "boolean"},
+        "max_slippage_points": {"type": "integer"},
+        "kill_switch_file_path": {"type": "string", "default": "KILL_SWITCH.txt"},
+        "kill_switch_close_positions": {"type": "boolean", "default": true}
+      },
+      "required": [
+        "max_total_trades",
+        "max_slippage_pips",
+        "magic_number",
+        "deviation",
+        "paper_trading",
+        "max_slippage_points",
+        "kill_switch_file_path",
+        "kill_switch_close_positions"
+      ]
+    },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": {"type": "string"},
+        "file": {"type": "string"},
+        "max_bytes": {"type": "integer"},
+        "backup_count": {"type": "integer"},
+        "format": {"type": "string"}
+      },
+      "required": ["level", "file", "max_bytes", "backup_count", "format"]
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "indicators": {
+          "type": "object",
+          "properties": {
+            "macd_fast": {"type": "integer"},
+            "macd_slow": {"type": "integer"},
+            "macd_signal": {"type": "integer"},
+            "rsi_period": {"type": "integer"},
+            "atr_period": {"type": "integer"},
+            "atr_multiplier": {"type": "number"}
+          },
+          "required": ["macd_fast", "macd_slow", "macd_signal", "rsi_period", "atr_period", "atr_multiplier"]
+        },
+        "sr": {
+          "type": "object",
+          "properties": {
+            "method": {"type": "string"},
+            "pivot_type": {"type": "string"},
+            "fractal_window": {"type": "integer"},
+            "zigzag_depth": {"type": "integer"},
+            "zigzag_deviation": {"type": "integer"},
+            "zigzag_backstep": {"type": "integer"}
+          },
+          "required": ["method", "pivot_type", "fractal_window", "zigzag_depth", "zigzag_deviation", "zigzag_backstep"]
+        },
+        "risk": {
+          "type": "object",
+          "properties": {
+            "risk_per_trade": {"type": "number"},
+            "max_risk_per_trade": {"type": "number"},
+            "max_daily_drawdown": {"type": "number"},
+            "max_open_trades": {"type": "integer"},
+            "max_position_size": {"type": "number"},
+            "max_daily_trades": {"type": "integer"},
+            "sl_atr_multiplier": {"type": "number"},
+            "tp_atr_multiplier": {"type": "number"},
+            "trailing_sl_enabled": {"type": "boolean"},
+            "trailing_sl_atr_multiplier": {"type": "number"},
+            "break_even_atr_multiplier": {"type": "number"},
+            "break_even_enabled": {"type": "boolean"}
+          },
+          "required": [
+            "risk_per_trade", "max_risk_per_trade", "max_daily_drawdown", "max_open_trades",
+            "max_position_size", "max_daily_trades", "sl_atr_multiplier", "tp_atr_multiplier",
+            "trailing_sl_enabled", "trailing_sl_atr_multiplier", "break_even_atr_multiplier",
+            "break_even_enabled"
+          ]
+        }
+      },
+      "required": ["indicators", "sr", "risk"]
+    },
+    "symbols": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Z]+$": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "lot_size": {"type": "number"},
+            "spread_limit_pips": {"type": "number"},
+            "indicators": {
+              "type": "object",
+              "properties": {
+                "macd_fast": {"type": "integer"},
+                "macd_slow": {"type": "integer"},
+                "macd_signal": {"type": "integer"},
+                "rsi_period": {"type": "integer"},
+                "atr_period": {"type": "integer"}
+              }
+            },
+            "sr": {
+              "type": "object",
+              "properties": {
+                "method": {"type": "string"}
+              }
+            },
+            "risk": {
+              "type": "object",
+              "properties": {
+                "risk_per_trade": {"type": "number"},
+                "sl_atr_multiplier": {"type": "number"},
+                "tp_atr_multiplier": {"type": "number"}
+              }
+            }
+          },
+          "required": ["enabled", "lot_size", "spread_limit_pips"]
+        }
+      }
+    }
+  },
+  "required": ["metatrader5", "global_settings", "logging", "defaults", "symbols"]
+}
