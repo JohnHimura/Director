@@ -15,10 +15,72 @@ El proyecto contiene los siguientes módulos principales:
 - **risk_manager.py**: Gestiona el riesgo en operaciones.
 - **logging_setup.py**: Configuración del sistema de logging.
 
+## Características
+
+- **Conexión a MetaTrader 5**: Integración directa con la plataforma MT5.
+- **Gestión de Órdenes**: Creación, modificación y cierre de órdenes de trading.
+- **Cálculo de Indicadores**: Implementación de indicadores técnicos comunes.
+- **Motor de Estrategias**: Creación y ejecución de estrategias personalizadas.
+- **Gestión de Riesgo**: Control de riesgo por operación y gestión de capital.
+- **Detección de Soporte/Resistencia**: Identificación de niveles clave de precio.
+- **Logging Completo**: Sistema de registro para monitoreo y depuración.
+
 ## Requisitos
 
 - Python 3.10.11
 - MetaTrader 5
+- Paquete Python de MetaTrader 5 (`pip install MetaTrader5`)
+- Otras dependencias listadas en `requirements.txt`
+
+## Instalación
+
+1. Clonar el repositorio:
+   ```
+   git clone https://github.com/JohnHimura/Director.git
+   ```
+
+2. Crear un entorno virtual:
+   ```
+   python -m venv venv
+   ```
+
+3. Activar el entorno virtual:
+   - Windows: `venv\Scripts\activate`
+   - Linux/Mac: `source venv/bin/activate`
+
+4. Instalar dependencias:
+   ```
+   pip install -r requirements.txt
+   ```
+
+## Uso
+
+```python
+from core.mt5_connector import MT5Connector
+from core.config_manager import ConfigManager
+
+# Cargar configuración
+config = ConfigManager("config.ini")
+
+# Conectar a MT5
+mt5 = MT5Connector(config)
+mt5.connect()
+
+# Realizar operaciones de trading
+# ...
+```
+
+## Contribuir
+
+1. Fork el repositorio
+2. Crear una rama de características (`git checkout -b feature/nueva-caracteristica`)
+3. Realizar cambios y hacer commit (`git commit -am 'Agregar nueva característica'`)
+4. Push a la rama (`git push origin feature/nueva-caracteristica`)
+5. Crear un nuevo Pull Request
+
+## Licencia
+
+Este proyecto está licenciado bajo la Licencia MIT - ver el archivo LICENSE para más detalles.
 
 ## Features
 
@@ -30,27 +92,6 @@ El proyecto contiene los siguientes módulos principales:
 - **Technical Indicators**: Comprehensive library of technical indicators
 - **Support/Resistance Detection**: Identify key price levels
 - **Logging**: Comprehensive logging for monitoring and debugging
-
-## Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/director-trading-bot.git
-   cd director-trading-bot
-   ```
-
-2. Create and activate a virtual environment (recommended):
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. Install the required packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Configure the bot by editing `config.json` (see Configuration section below)
 
 ## Configuration
 
@@ -218,10 +259,6 @@ The bot logs to both console and file by default. Log files are rotated when the
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Disclaimer
 
