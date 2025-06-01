@@ -1,33 +1,28 @@
 {
   "metatrader5": {
-    "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
-    "server": "XMGlobal-MT5 2",
-    "login": 166542368,
-    "password": "StandarGem009*",
+    "_comment": "MT5 connection parameters (path, server, login, password) are now loaded from environment variables: MT5_PATH, MT5_SERVER, MT5_LOGIN, MT5_PASSWORD",
     "timeout": 60000,
-    "portable": false
+    "portable": false,
+    "connection_max_retries": 3,
+    "connection_retry_delay_seconds": 10.0
   },
   "global_settings": {
-    "max_total_trades": 5,
-    "max_slippage_pips": 3.0,
-    "magic_number": 123456,
-    "deviation": 10, # This might be deprecated or used for other purposes now
+    "max_total_trades": 10,
+    "max_slippage_pips": 2.0,
+    "magic_number": 1001,
+    "deviation": 5,
     "paper_trading": true,
-    "max_slippage_points": 10,
+    "max_slippage_points": 20,
     "kill_switch_file_path": "KILL_SWITCH.txt",
     "kill_switch_close_positions": true,
     "enable_daily_drawdown_limit": true,
     "max_daily_drawdown_percentage": 2.5,
     "close_positions_on_daily_drawdown_limit": true,
     "enable_news_filter": false,
-    "high_impact_news_windows": [
-      # Example: ["YYYY-MM-DD HH:MM:SS", "YYYY-MM-DD HH:MM:SS", "EVENT_NAME"]
-      # ["2024-03-15 12:30:00", "2024-03-15 13:30:00", "US CPI"],
-      # ["2024-03-20 18:00:00", "2024-03-20 19:00:00", "FOMC Statement"]
-    ]
+    "high_impact_news_windows": []
   },
   "logging": {
-    "level": "DEBUG",
+    "level": "INFO",
     "file": "logs/trading_bot.log",
     "max_bytes": 10485760,
     "backup_count": 5,
@@ -40,12 +35,13 @@
       "macd_signal": 9,
       "rsi_period": 14,
       "atr_period": 14,
+      "adx_period": 14,
       "atr_multiplier": 2.0
     },
     "sr": {
-      "method": "pivots",
-      "pivot_type": "standard",
-      "fractal_window": 2,
+      "method": "fractal",
+      "pivot_type": "classic",
+      "fractal_window": 5,
       "zigzag_depth": 12,
       "zigzag_deviation": 5,
       "zigzag_backstep": 3
@@ -53,22 +49,22 @@
     "risk": {
       "risk_per_trade": 0.01,
       "max_risk_per_trade": 0.02,
-      "max_daily_drawdown": 0.50,
-      "max_open_trades": 5,
-      "max_position_size": 0.1,
+      "max_daily_drawdown": 0.05,
+      "max_open_trades": 3,
+      "max_position_size": 1.0,
       "max_daily_trades": 10,
-            "sl_atr_multiplier": 1.5, # Fallback if use_atr_sl_tp is false
-            "tp_atr_multiplier": 3.0, # Fallback if use_atr_sl_tp is false
-      "trailing_sl_enabled": true,
-      "trailing_sl_atr_multiplier": 1.0,
-      "break_even_atr_multiplier": 1.5,
-            "break_even_enabled": true,
-            "use_atr_sl_tp": false,     # Default to false
-            "atr_sl_multiplier": 1.5,
-            "atr_tp_multiplier": 2.0  # Default TP multiplier
+      "sl_atr_multiplier": 1.5,
+      "tp_atr_multiplier": 2.0,
+      "trailing_sl_enabled": false,
+      "trailing_sl_atr_multiplier": 1.5,
+      "break_even_atr_multiplier": 1.0,
+      "break_even_enabled": false,
+      "use_atr_sl_tp": true,
+      "atr_sl_multiplier": 1.5,
+      "atr_tp_multiplier": 3.0
     },
-    "strategy_params": { # Defaults for strategy_params
-      "use_atr_sl_tp": false,
+    "strategy_params": {
+      "use_atr_sl_tp": true,
       "atr_sl_tp_atr_period": 14,
       "atr_sl_multiplier": 1.5,
       "atr_tp_multiplier": 3.0,
@@ -82,84 +78,31 @@
       "breakeven_pips_profit": 30,
       "breakeven_extra_pips": 2,
       "enable_time_based_exit": false,
-      "max_trade_duration_hours": 48
+      "max_trade_duration_hours": 24,
+      "enable_adx_filter": false,
+      "adx_threshold": 25.0
     }
   },
   "symbols": {
     "EURUSD": {
       "enabled": true,
-      "lot_size": 0.1,
-      "spread_limit_pips": 3.0,
+      "lot_size": 0.01,
+      "spread_limit_pips": 1.5,
       "indicators": {
-        "macd_fast": 10,
-        "macd_slow": 21,
-        "macd_signal": 7,
-        "rsi_period": 12,
-        "atr_period": 14
+        "rsi_period": 12
       },
-      "sr": {
-        "method": "fractals"
-      },
-      "risk": {
-        "risk_per_trade": 0.005,
-        "sl_atr_multiplier": 1.8, # Kept for fallback or other SL types
-        "tp_atr_multiplier": 3.5, # Kept for fallback or other TP types
-        "use_atr_sl_tp": true,    # EURUSD will use ATR SL/TP
-        "atr_sl_multiplier": 2.0, # Custom SL for EURUSD
-        "atr_tp_multiplier": 4.0  # Custom TP for EURUSD
-      },
-      "strategy_params": { # EURUSD specific strategy params
+      "strategy_params": {
+        "enable_adx_filter": true,
+        "adx_threshold": 20.0,
         "use_atr_sl_tp": true,
-        "atr_sl_tp_atr_period": 14,
-        "atr_sl_multiplier": 2.0,
-        "atr_tp_multiplier": 3.5,
-        "enable_trailing_stop": true,
-        "trailing_start_pips_profit": 60,
-        "trailing_step_pips": 15,
-        "trailing_activation_price_distance_pips": 25,
-        "enable_breakeven_stop": true,
-        "breakeven_pips_profit": 40,
-        "breakeven_extra_pips": 3,
-        "enable_time_based_exit": true, # Enable for EURUSD
-        "max_trade_duration_hours": 24  # Custom for EURUSD
+        "atr_sl_multiplier": 1.2,
+        "atr_tp_multiplier": 2.5
       }
     },
     "GBPUSD": {
       "enabled": false,
-      "lot_size": 0.1,
-      "spread_limit_pips": 4.0
-      # strategy_params will use defaults
-    },
-    "XAUUSD": {
-      "enabled": false,
       "lot_size": 0.01,
-      "spread_limit_pips": 50.0
-      # strategy_params will use defaults
-    },
-    "AUDUSD": {
-      "enabled": true,
-      "lot_size": 0.05,
-      "spread_limit_pips": 2.5,
-      "indicators": {
-        "rsi_period": 10
-      },
-      "risk": {
-        "risk_per_trade": 0.008,
-        "use_atr_sl_tp": false,
-        "atr_sl_multiplier": 1.0,
-        "atr_tp_multiplier": 1.5
-      },
-      "strategy_params": { # AUDUSD specific strategy params
-        "use_atr_sl_tp": false, # Explicitly false, will use its old SL/TP logic or fixed pips
-        "default_stop_loss_pips": 60,
-        "default_take_profit_pips": 120,
-        "enable_trailing_stop": false,
-        "enable_breakeven_stop": true,
-        "breakeven_pips_profit": 25,
-        "breakeven_extra_pips": 1,
-        "enable_time_based_exit": false # Keep disabled for AUDUSD
-        # max_trade_duration_hours will use default if not specified
-      }
+      "spread_limit_pips": 2.0
     }
   }
 }

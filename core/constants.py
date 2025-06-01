@@ -40,6 +40,8 @@ CONFIG_MT5_LOGIN = "login"
 CONFIG_MT5_PASSWORD = "password"
 CONFIG_MT5_TIMEOUT = "timeout"
 CONFIG_MT5_PORTABLE = "portable"
+CONFIG_MT5_CONNECTION_MAX_RETRIES = "connection_max_retries"
+CONFIG_MT5_CONNECTION_RETRY_DELAY = "connection_retry_delay_seconds"
 
 # Configuration Keys - Defaults & Symbols subsections
 CONFIG_INDICATORS = "indicators"
@@ -89,6 +91,10 @@ CONFIG_BREAKEVEN_EXTRA_PIPS = "breakeven_extra_pips"
 # Time-Based Exit Config Keys
 CONFIG_ENABLE_TIME_BASED_EXIT = "enable_time_based_exit"
 CONFIG_MAX_TRADE_DURATION_HOURS = "max_trade_duration_hours"
+# ADX Filter Config Keys
+CONFIG_ENABLE_ADX_FILTER = "enable_adx_filter"
+CONFIG_ADX_THRESHOLD = "adx_threshold"
+# Note: ADX period for calculation is usually managed under CONFIG_INDICATORS section (e.g., "adx_period")
 
 
 # Order Types
@@ -214,6 +220,13 @@ DEFAULT_MAX_TRADE_DURATION_HOURS = 24 # e.g., 1 day
 DEFAULT_ENABLE_DAILY_DRAWDOWN_LIMIT = False
 DEFAULT_MAX_DAILY_DRAWDOWN_PERCENTAGE = 2.0 # Default 2%
 DEFAULT_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT = True
+# ADX Filter Defaults
+DEFAULT_ENABLE_ADX_FILTER = False
+DEFAULT_ADX_THRESHOLD = 25.0
+DEFAULT_ADX_PERIOD = 14 # Default period for ADX calculation if not specified elsewhere
+# MT5 Connection Retry Defaults
+DEFAULT_MT5_CONNECTION_MAX_RETRIES = 5
+DEFAULT_MT5_CONNECTION_RETRY_DELAY_SECONDS = 5.0
 
 
 LOT_SIZE = "lot_size" # Key for RiskManager output, matches CONFIG_LOT_SIZE

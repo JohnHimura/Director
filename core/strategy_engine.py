@@ -196,10 +196,67 @@ class Strategy(abc.ABC):
 
 class MACDStrategy(Strategy):
     """MACD-based trading strategy."""
-    
+
+    def __init__(self, config_manager: ConfigManager, symbol_for_params: Optional[str] = None, **kwargs):
+        """
+        Initialize the MACD strategy.
+        Args:
+            config_manager: Instance of ConfigManager.
+            symbol_for_params: The symbol for which this strategy instance is configured (important for fetching correct params).
+            **kwargs: Optimizable parameters (e.g., rsi_period, macd_fast) that override config values.
+        """
+        super().__init__(config_manager) # Pass ConfigManager to base Strategy class
+        self.symbol_for_params = symbol_for_params # Store the symbol context
+        self.strategy_override_params = kwargs # Store override parameters
+
+        # Initialize parameters from kwargs or config for quick access if needed,
+        # or fetch them dynamically in analyze/ _check_entry_signal.
+        # For optimization, these will be set from kwargs.
+        # For live trading, kwargs will be empty, and they'll be fetched from config.
+
+        # Example of how parameters could be managed:
+        # indicator_config = self.config.get_indicator_params(self.symbol_for_params) if self.symbol_for_params else self.config.get_defaults().get(C.CONFIG_INDICATORS,{})
+        # self.rsi_period = self.strategy_override_params.get(C.CONFIG_INDICATOR_RSI_PERIOD,
+        #                                                   indicator_config.get(C.CONFIG_INDICATOR_RSI_PERIOD, C.DEFAULT_RSI_PERIOD))
+        # self.macd_fast = self.strategy_override_params.get(C.CONFIG_INDICATOR_MACD_FAST,
+        #                                                  indicator_config.get(C.CONFIG_INDICATOR_MACD_FAST, C.DEFAULT_MACD_FAST))
+        # ... and so on for other optimizable parameters.
+
+    def _get_param(self, param_name: str, default_value: Any) -> Any:
+        """
+        Helper to get a parameter value, prioritizing overrides, then symbol-specific config, then defaults.
+        """
+        if param_name in self.strategy_override_params:
+            return self.strategy_override_params[param_name]
+
+        if self.symbol_for_params:
+            # Check symbol-specific indicator params first
+            indicator_params = self.config.get_indicator_params(self.symbol_for_params) # self.config is ConfigManager
+            if param_name in indicator_params:
+                return indicator_params[param_name]
+
+            # Check symbol-specific strategy params (for things like ATR multipliers for SL/TP)
+            symbol_config_data = self.config.get_symbol_config(self.symbol_for_params)
+            strategy_params_config = symbol_config_data.get(C.CONFIG_STRATEGY_PARAMS, {})
+            if param_name in strategy_params_config:
+                return strategy_params_config[param_name]
+
+        # Fallback to default indicator params from config
+        default_indicator_params = self.config.get_defaults().get(C.CONFIG_INDICATORS, {})
+        if param_name in default_indicator_params:
+            return default_indicator_params[param_name]
+
+        # Fallback to default strategy_params from config
+        default_strategy_params = self.config.get_defaults().get(C.CONFIG_STRATEGY_PARAMS, {})
+        if param_name in default_strategy_params:
+            return default_strategy_params[param_name]
+
+        return default_value
+
+
     def analyze(
         self,
-        symbol: str,
+        symbol: str, # Current symbol being analyzed (might differ from self.symbol_for_params if strategy is reused)
         data: Dict[str, pd.DataFrame],
         position_info: Optional[Dict[str, Any]] = None
     ) -> StrategyResult:
@@ -227,7 +284,7 @@ class MACDStrategy(Strategy):
         primary_tf = primary_tf_keys[0] if primary_tf_keys else C.TF_M15 if hasattr(C, 'TF_M15') else 'M15' # Fallback
 
         if primary_tf not in data:
-            logger.error(f"Primary timeframe {primary_tf} not found in data for symbol {symbol}")
+            logger.error(f"Primary timeframe {primary_tf} not found in data for symbol {symbol}", extra={'symbol': symbol})
             return StrategyResult(message=f"Primary timeframe {primary_tf} not found for {symbol}")
         
         df = data[primary_tf].copy()
@@ -236,8 +293,25 @@ class MACDStrategy(Strategy):
         df.columns = [col.lower() for col in df.columns]
         
         # Calculate indicators
-        indicator_params = self.config.get_indicator_params(symbol)
-        df = self.indicator_calc.calculate_all(df, indicator_params)
+        # Build the indicator_config dictionary for IndicatorCalculator.calculate_all
+        # using the _get_param method for each parameter.
+        effective_indicator_params = {
+            C.CONFIG_INDICATOR_RSI_PERIOD: self._get_param(C.CONFIG_INDICATOR_RSI_PERIOD, getattr(C, 'DEFAULT_RSI_PERIOD', 14)),
+            C.CONFIG_INDICATOR_MACD_FAST: self._get_param(C.CONFIG_INDICATOR_MACD_FAST, getattr(C, 'DEFAULT_MACD_FAST_PERIOD', 12)),
+            C.CONFIG_INDICATOR_MACD_SLOW: self._get_param(C.CONFIG_INDICATOR_MACD_SLOW, getattr(C, 'DEFAULT_MACD_SLOW_PERIOD', 26)),
+            C.CONFIG_INDICATOR_MACD_SIGNAL: self._get_param(C.CONFIG_INDICATOR_MACD_SIGNAL, getattr(C, 'DEFAULT_MACD_SIGNAL_PERIOD', 9)),
+            C.CONFIG_INDICATOR_ATR_PERIOD: self._get_param(C.CONFIG_INDICATOR_ATR_PERIOD, getattr(C, 'DEFAULT_ATR_PERIOD', 14)),
+            # Add any other indicator params MACDStrategy uses, ensuring they use _get_param and constants for defaults
+            'adx_period': self._get_param('adx_period', getattr(C, 'DEFAULT_ADX_PERIOD', 14)), # Example if ADX is used
+            # Include any other parameters that IndicatorCalculator.calculate_all or its sub-calculators expect
+            # For example, if specific MAs were optimizable:
+            # 'ema_short_period': self._get_param('ema_short_period', getattr(C, 'DEFAULT_EMA_SHORT_PERIOD', 20)),
+            # 'ema_long_period': self._get_param('ema_long_period', getattr(C, 'DEFAULT_EMA_LONG_PERIOD', 50)),
+        }
+        # The IndicatorCalculator's individual methods (like TrendIndicators.calculate)
+        # will use these values from the passed 'indicator_config'.
+
+        df = self.indicator_calc.calculate_all(df, indicator_config=effective_indicator_params)
         
         # Get support/resistance levels
         sr_levels = self.sr_handler.get_sr_levels(df)
@@ -324,13 +398,28 @@ class MACDStrategy(Strategy):
         # Skip if already in a position
         if position_info and position_info.get(C.POSITION_TYPE):
             return SignalType.NONE, 0.0, "Already in a position"
+
+        # ADX Market Regime Filter
+        enable_adx_filter = self._get_param(C.CONFIG_ENABLE_ADX_FILTER,
+                                            getattr(C, 'DEFAULT_ENABLE_ADX_FILTER', False))
+        if enable_adx_filter:
+            adx_threshold = self._get_param(C.CONFIG_ADX_THRESHOLD,
+                                            getattr(C, 'DEFAULT_ADX_THRESHOLD', 25.0))
+            if C.INDICATOR_ADX not in df.columns:
+                logger.warning(f"ADX filter enabled but ADX indicator ('{C.INDICATOR_ADX}') not found in DataFrame. Allowing signal check.", extra={'symbol': symbol})
+            else:
+                latest_adx = df[C.INDICATOR_ADX].iloc[-1]
+                if pd.isna(latest_adx):
+                    logger.warning(f"ADX value is NaN. ADX filter cannot be applied. Allowing signal check.", extra={'symbol': symbol})
+                elif latest_adx < adx_threshold:
+                    logger.info(f"ADX filter: Market not trending enough. ADX ({latest_adx:.2f}) < Threshold ({adx_threshold:.2f}). No signal generated.", extra={'symbol': symbol})
+                    return SignalType.NONE, 0.0, f"ADX filter: Market not trending (ADX {latest_adx:.2f} < {adx_threshold:.2f})"
         
         # Check if we have required indicators
         required_indicators = [C.INDICATOR_RSI, C.INDICATOR_MACD, C.INDICATOR_MACD_SIGNAL_LINE, C.INDICATOR_ATR]
         if not all(ind in df.columns for ind in required_indicators):
-            # Log which indicators are missing for easier debugging
             missing_inds = [ind for ind in required_indicators if ind not in df.columns]
-            logger.warning(f"Missing required indicators for entry signal: {missing_inds}. Available: {df.columns.tolist()}")
+            logger.warning(f"Missing required indicators for entry signal: {missing_inds}. Available: {df.columns.tolist()}", extra={'symbol': symbol})
             return SignalType.NONE, 0.0, f"Missing required indicators: {missing_inds}"
         
         # Get indicator values
@@ -405,61 +494,25 @@ class MACDStrategy(Strategy):
         # This will be fixed by passing `symbol` to `_check_entry_signal`.
 
         # Placeholder: symbol = self.symbol if hasattr(self, 'symbol') else "default"
-        # This should be fixed by ensuring 'symbol' is passed to _check_entry_signal
-        # For now, we'll assume this method will be called from `analyze` which has `symbol`.
-        # The call in `analyze` is:
-        # signal, signal_strength, message = self._check_entry_signal(
-        # df=df, current_price=current_price, trend_direction=trend_direction,
-        # sr_levels=sr_levels, position_info=position_info, symbol=symbol <--- Add symbol here
-        # )
-        # And update method signature: def _check_entry_signal(self, ..., symbol: str)
+        # The symbol argument is correctly passed from analyze method.
 
-        # Assuming 'symbol' is passed as an argument to this method in the final implementation
-        # For now, let's use a placeholder or skip fetching symbol-specific strategy_params directly here.
-        # The logic below will be wrapped after fetching strategy_params.
+        # Fetch strategy-level parameters using _get_param for consistency and optimizability
+        min_strength = self._get_param(C.CONFIG_STRATEGY_MIN_SIGNAL_STRENGTH,
+                                       getattr(C, 'DEFAULT_MIN_SIGNAL_STRENGTH', 0.7))
 
-        # The current `analyze` method doesn't pass `symbol` to `_check_entry_signal`
-        # This will be the first change.
+        use_atr_sl_tp_config = self._get_param(C.CONFIG_USE_ATR_SL_TP,
+                                               getattr(C, 'DEFAULT_USE_ATR_SL_TP', False))
+        atr_sl_multiplier_config = self._get_param(C.CONFIG_ATR_SL_MULTIPLIER,
+                                                   getattr(C, 'DEFAULT_ATR_SL_MULTIPLIER', 1.5))
+        atr_tp_multiplier_config = self._get_param(C.CONFIG_ATR_TP_MULTIPLIER,
+                                                   getattr(C, 'DEFAULT_ATR_TP_MULTIPLIER', 3.0))
 
-        # --- This logic needs to be inside the `if buy_strength` and `if sell_strength` blocks ---
-        # --- after fetching strategy_params for the specific symbol ---
-
-        # For now, will proceed with the existing SL/TP logic and then refactor it
-        # once the symbol argument is correctly plumbed.
-
-        # Existing SL/TP logic (example, will be replaced/augmented)
-        default_sl_atr_multiplier = 2.0 # Example, this comes from old logic
-        default_tp_rr_ratio = 3.0     # Example
-
-        # The new logic will be conditional based on use_atr_sl_tp
-        # This requires fetching strategy_params using the `symbol`
-        # For now, let's assume strategy_params are fetched and available.
-        # This is a placeholder for where strategy_params would be fetched:
-        # strategy_params = self.config.get_symbol_config(symbol).get(C.CONFIG_STRATEGY_PARAMS, {})
-        # use_atr = strategy_params.get(C.CONFIG_USE_ATR_SL_TP, C.DEFAULT_USE_ATR_SL_TP)
-        # sl_mult = strategy_params.get(C.CONFIG_ATR_SL_MULTIPLIER, C.DEFAULT_ATR_SL_MULTIPLIER)
-        # tp_mult = strategy_params.get(C.CONFIG_ATR_TP_MULTIPLIER, C.DEFAULT_ATR_TP_MULTIPLIER)
-
-        # This part will be heavily refactored. The current SL/TP is inside the if blocks.
-
-        strategy_settings = self.config.get_global_settings().get(C.CONFIG_STRATEGY, {})
-        min_strength = strategy_settings.get(C.CONFIG_STRATEGY_MIN_SIGNAL_STRENGTH, 0.7)
-
-        # Placeholder for symbol - this needs to be passed to _check_entry_signal
-        # This is a conceptual problem in the current refactoring step, will fix by modifying analyze's call
-        # temp_symbol_for_params = "EURUSD" # TODO: Replace with actual symbol passed to method
-        # Use the passed symbol argument
-        symbol_config = self.config.get_symbol_config(symbol)
-        strategy_params = symbol_config.get(C.CONFIG_STRATEGY_PARAMS, {})
-
-        use_atr_sl_tp_config = strategy_params.get(C.CONFIG_USE_ATR_SL_TP, C.DEFAULT_USE_ATR_SL_TP)
-        atr_sl_multiplier_config = strategy_params.get(C.CONFIG_ATR_SL_MULTIPLIER, C.DEFAULT_ATR_SL_MULTIPLIER)
-        atr_tp_multiplier_config = strategy_params.get(C.CONFIG_ATR_TP_MULTIPLIER, C.DEFAULT_ATR_TP_MULTIPLIER)
-
-        # Fallback to old sl/tp multipliers from risk section if ATR SL/TP is not used,
-        # or define fixed pips as another fallback.
-        # The current MACD strategy uses S/R and ATR for SL, and R:R for TP.
-        # We will replace this with the new ATR logic if use_atr_sl_tp is true.
+        # Fallback SL/TP pips (if use_atr_sl_tp is False and S/R logic also fails)
+        # These could also be optimizable if desired
+        # Note: pips calculation requires point size, which is not directly available here.
+        # This strategy primarily uses ATR or S/R for SL/TP.
+        # default_sl_pips = self._get_param(C.CONFIG_DEFAULT_SL_PIPS, getattr(C, 'DEFAULT_SL_PIPS_VALUE', 50))
+        # default_tp_pips = self._get_param(C.CONFIG_DEFAULT_TP_PIPS, getattr(C, 'DEFAULT_TP_PIPS_VALUE', 100))
 
         final_stop_loss = 0.0
         final_take_profit = 0.0
@@ -471,14 +524,21 @@ class MACDStrategy(Strategy):
                 take_profit_distance = atr * atr_tp_multiplier_config
                 final_stop_loss = current_price - stop_loss_distance
                 final_take_profit = current_price + take_profit_distance
-                logger.debug(f"ATR SL/TP for BUY: SL_dist={stop_loss_distance:.5f}, TP_dist={take_profit_distance:.5f}, ATR={atr:.5f}")
+                logger.debug(f"ATR SL/TP for BUY: SL_dist={stop_loss_distance:.5f}, TP_dist={take_profit_distance:.5f}, ATR={atr:.5f}", extra={'symbol': symbol})
             else: # Fallback to existing logic (S/R based SL, R:R TP)
+                fallback_sl_atr_mult = self._get_param(C.OLD_SL_ATR_MULTIPLIER, getattr(C, 'DEFAULT_FALLBACK_SL_ATR_MULTIPLIER', 2.0))
+                fallback_tp_rr_ratio = self._get_param(C.CONFIG_RISK_REWARD_RATIO, getattr(C, 'DEFAULT_FALLBACK_TP_RR_RATIO', 1.5))
+
                 if nearest_support and atr > 0:
-                    final_stop_loss = min(nearest_support.price, current_price - (atr * C.DEFAULT_ATR_SL_MULTIPLIER)) # Default ATR mult for SL
-                    final_take_profit = current_price + ( (current_price - final_stop_loss) * C.DEFAULT_ATR_TP_MULTIPLIER )
+                    final_stop_loss = min(nearest_support.price, current_price - (atr * fallback_sl_atr_mult))
+                    if current_price > final_stop_loss and final_stop_loss > 0:
+                        final_take_profit = current_price + ((current_price - final_stop_loss) * fallback_tp_rr_ratio)
+                    else:
+                        logger.warning(f"Invalid S/R-ATR based SL for BUY. Entry={current_price}, Calc SL={final_stop_loss}. ATR={atr}, SupportPx={nearest_support.price if nearest_support else 'N/A'}.", extra={'symbol': symbol})
+                        return SignalType.NONE, 0.0, "No clear signal due to SL/TP calculation issue (BUY S/R Fallback - Invalid SL)"
                 else:
-                    logger.warning(f"Cannot calculate S/R-ATR based SL/TP for BUY {symbol}. ATR={atr}, Support={nearest_support}")
-                    return SignalType.NONE, 0.0, "No clear signal due to SL/TP calculation issue (BUY Fallback)"
+                    logger.warning(f"Cannot calculate S/R-ATR based SL for BUY. ATR={atr}, Support={nearest_support}. Check config.", extra={'symbol': symbol})
+                    return SignalType.NONE, 0.0, "No clear signal due to SL/TP calculation issue (BUY S/R Fallback)"
 
             self.stop_loss = final_stop_loss
             self.take_profit = final_take_profit
@@ -491,14 +551,21 @@ class MACDStrategy(Strategy):
                 take_profit_distance = atr * atr_tp_multiplier_config
                 final_stop_loss = current_price + stop_loss_distance
                 final_take_profit = current_price - take_profit_distance
-                logger.debug(f"ATR SL/TP for SELL: SL_dist={stop_loss_distance:.5f}, TP_dist={take_profit_distance:.5f}, ATR={atr:.5f}")
+                logger.debug(f"ATR SL/TP for SELL: SL_dist={stop_loss_distance:.5f}, TP_dist={take_profit_distance:.5f}, ATR={atr:.5f}", extra={'symbol': symbol})
             else: # Fallback
+                fallback_sl_atr_mult = self._get_param(C.OLD_SL_ATR_MULTIPLIER, getattr(C, 'DEFAULT_FALLBACK_SL_ATR_MULTIPLIER', 2.0))
+                fallback_tp_rr_ratio = self._get_param(C.CONFIG_RISK_REWARD_RATIO, getattr(C, 'DEFAULT_FALLBACK_TP_RR_RATIO', 1.5))
+
                 if nearest_resistance and atr > 0:
-                    final_stop_loss = max(nearest_resistance.price, current_price + (atr * C.DEFAULT_ATR_SL_MULTIPLIER))
-                    final_take_profit = current_price - ( (final_stop_loss - current_price) * C.DEFAULT_ATR_TP_MULTIPLIER )
+                    final_stop_loss = max(nearest_resistance.price, current_price + (atr * fallback_sl_atr_mult))
+                    if current_price < final_stop_loss:
+                        final_take_profit = current_price - ((final_stop_loss - current_price) * fallback_tp_rr_ratio)
+                    else:
+                        logger.warning(f"Invalid S/R-ATR based SL for SELL. Entry={current_price}, Calc SL={final_stop_loss}. ATR={atr}, ResistancePx={nearest_resistance.price if nearest_resistance else 'N/A'}.", extra={'symbol': symbol})
+                        return SignalType.NONE, 0.0, "No clear signal due to SL/TP calculation issue (SELL S/R Fallback - Invalid SL)"
                 else:
-                    logger.warning(f"Cannot calculate S/R-ATR based SL/TP for SELL {symbol}. ATR={atr}, Resistance={nearest_resistance}")
-                    return SignalType.NONE, 0.0, "No clear signal due to SL/TP calculation issue (SELL Fallback)"
+                    logger.warning(f"Cannot calculate S/R-ATR based SL for SELL. ATR={atr}, Resistance={nearest_resistance}. Check config.", extra={'symbol': symbol})
+                    return SignalType.NONE, 0.0, "No clear signal due to SL/TP calculation issue (SELL S/R Fallback)"
 
             self.stop_loss = final_stop_loss
             self.take_profit = final_take_profit

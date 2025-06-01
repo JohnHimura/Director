@@ -4,14 +4,13 @@
     "metatrader5": {
       "type": "object",
       "properties": {
-        "path": {"type": "string"},
-        "server": {"type": "string"},
-        "login": {"type": "integer"},
-        "password": {"type": "string"},
-        "timeout": {"type": "integer"},
-        "portable": {"type": "boolean"}
+        "timeout": {"type": "integer", "default": 60000},
+        "portable": {"type": "boolean", "default": false},
+        "connection_max_retries": {"type": "integer", "default": 5, "minimum": 0},
+        "connection_retry_delay_seconds": {"type": "number", "default": 5.0, "minimum": 1.0}
       },
-      "required": ["path", "server", "login", "password", "timeout", "portable"]
+      "required": ["timeout", "portable", "connection_max_retries", "connection_retry_delay_seconds"],
+      "description": "MT5 connection parameters like path, server, login, password are now loaded from environment variables: MT5_PATH, MT5_SERVER, MT5_LOGIN, MT5_PASSWORD. Retry parameters for initial connection are configured here."
     },
     "global_settings": {
       "type": "object",
@@ -81,9 +80,13 @@
             "macd_signal": {"type": "integer"},
             "rsi_period": {"type": "integer"},
             "atr_period": {"type": "integer"},
+            "adx_period": {"type": "integer", "default": 14}, # ADX period for calculation
             "atr_multiplier": {"type": "number"}
           },
-          "required": ["macd_fast", "macd_slow", "macd_signal", "rsi_period", "atr_period", "atr_multiplier"]
+          "required": ["macd_fast", "macd_slow", "macd_signal", "rsi_period", "atr_period", "adx_period", "atr_multiplier"]
+        },
+        "strategy_params": { # Added definition for defaults.strategy_params
+          "$ref": "#/definitions/strategy_params_properties"
         },
         "sr": {
           "type": "object",
@@ -146,7 +149,9 @@
           "breakeven_pips_profit": {"type": "integer", "default": 30},
           "breakeven_extra_pips": {"type": "integer", "default": 2},
           "enable_time_based_exit": {"type": "boolean", "default": false},
-          "max_trade_duration_hours": {"type": "integer", "default": 24, "minimum": 1}
+          "max_trade_duration_hours": {"type": "integer", "default": 24, "minimum": 1},
+          "enable_adx_filter": {"type": "boolean", "default": false},
+          "adx_threshold": {"type": "number", "default": 25.0, "minimum": 0, "maximum": 100}
         },
         "required": [
             "use_atr_sl_tp", "atr_sl_tp_atr_period", "atr_sl_multiplier", "atr_tp_multiplier",
@@ -154,7 +159,8 @@
             "enable_trailing_stop", "trailing_start_pips_profit", "trailing_step_pips",
             "trailing_activation_price_distance_pips",
             "enable_breakeven_stop", "breakeven_pips_profit", "breakeven_extra_pips",
-            "enable_time_based_exit", "max_trade_duration_hours"
+            "enable_time_based_exit", "max_trade_duration_hours",
+            "enable_adx_filter", "adx_threshold"
         ]
       }
     },

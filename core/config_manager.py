@@ -3,8 +3,8 @@ Configuration manager for loading and accessing trading bot settings.
 """
 
 import json
-import os
-from typing import Dict, Any, Optional, List, Union
+import os # Ensure os is imported
+from typing import Dict, Any, Optional, List, Union, Tuple # Ensure Tuple is imported
 import logging
 from pathlib import Path
 import yaml
@@ -27,7 +27,8 @@ class ConfigError(Exception):
 class ConfigManager:
     """Manages loading and accessing configuration settings."""
     
-    _schema: Optional[Dict[str, Any]] = None # Added class variable for schema
+    _schema: Optional[Dict[str, Any]] = None
+    _mt5_credentials: Dict[str, Any] = {} # To store credentials from env vars
 
     def __init__(self, config_path: str = "config.json"):
         """
@@ -37,9 +38,11 @@ class ConfigManager:
             config_path: Path to the configuration JSON/YAML file
         """
         self.config_path = config_path
+        self._load_mt5_credentials_from_env() # Load credentials first
+
         self._config = self._load_config_data()
         self._load_schema()
-        self._validate_config_data(self._config) # Validate initial load
+        self._validate_config_data(self._config) # Validate file-based config
         self._last_modified_time = self._get_file_mod_time()
         
         # Cache TTL (5 minutes by default)
@@ -140,6 +143,35 @@ class ConfigManager:
             logger.error(f"Invalid schema during validation: {e}")
             raise ConfigError(f"Invalid configuration schema: {e.message}")
 
+    def _load_mt5_credentials_from_env(self) -> None:
+        """Loads MT5 credentials from environment variables and validates them."""
+        path = os.getenv("MT5_PATH")
+        server = os.getenv("MT5_SERVER")
+        login_str = os.getenv("MT5_LOGIN")
+        password = os.getenv("MT5_PASSWORD")
+
+        if not path:
+            raise ConfigError("Missing MT5_PATH environment variable.")
+        if not server:
+            raise ConfigError("Missing MT5_SERVER environment variable.")
+        if not login_str:
+            raise ConfigError("Missing MT5_LOGIN environment variable.")
+        if not password:
+            raise ConfigError("Missing MT5_PASSWORD environment variable.")
+
+        try:
+            login = int(login_str)
+        except ValueError:
+            raise ConfigError(f"MT5_LOGIN environment variable ('{login_str}') must be an integer.")
+
+        self._mt5_credentials = {
+            C.CONFIG_MT5_PATH: path,
+            C.CONFIG_MT5_SERVER: server,
+            C.CONFIG_MT5_LOGIN: login,
+            C.CONFIG_MT5_PASSWORD: password,
+        }
+        logger.info("Successfully loaded MT5 credentials from environment variables.")
+
     def check_and_reload_config(self) -> Tuple[bool, Dict[str, Any]]:
         """
         Check if the config file has been modified and reload if it has.
@@ -190,7 +222,7 @@ class ConfigManager:
         Identifies differences between old and new configurations relevant for hot-reloading.
         """
         changes = {}
-        
+
         # 1. Logging level
         old_log_cfg = old_cfg.get(C.CONFIG_LOGGING, {})
         new_log_cfg = new_cfg.get(C.CONFIG_LOGGING, {})
@@ -237,7 +269,7 @@ class ConfigManager:
 
             if sym_changes:
                 changed_symbols_details[sym] = sym_changes
-        
+
         if changed_symbols_details:
             changes[C.RELOAD_CHANGES_SYMBOLS] = changed_symbols_details
             logger.info(f"Symbol configurations changed: {changed_symbols_details}")
@@ -301,15 +333,27 @@ class ConfigManager:
         """
         save_path = config_path or self.config_path
         file_path = Path(save_path)
+
+        # Create a copy of the config to save, excluding sensitive MT5 credentials
+        config_to_save = copy.deepcopy(self._config)
+        if C.CONFIG_METATRADER5 in config_to_save:
+            # Ensure the metatrader5 section itself exists before trying to delete keys
+            config_to_save[C.CONFIG_METATRADER5].pop(C.CONFIG_MT5_PATH, None)
+            config_to_save[C.CONFIG_METATRADER5].pop(C.CONFIG_MT5_SERVER, None)
+            config_to_save[C.CONFIG_METATRADER5].pop(C.CONFIG_MT5_LOGIN, None)
+            config_to_save[C.CONFIG_METATRADER5].pop(C.CONFIG_MT5_PASSWORD, None)
+            # If the metatrader5 section becomes empty, optionally remove it
+            if not config_to_save[C.CONFIG_METATRADER5]:
+                del config_to_save[C.CONFIG_METATRADER5]
         
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 if file_path.suffix.lower() in [C.YAML_SUFFIX_LOWER, C.YAML_SUFFIX_YML]:
-                    yaml.dump(self._config, f, default_flow_style=False)
+                    yaml.dump(config_to_save, f, default_flow_style=False)
                 else:  # Default to JSON
-                    json.dump(self._config, f, indent=4)
+                    json.dump(config_to_save, f, indent=4)
                     
-            logger.info(f"Configuration saved to {save_path}")
+            logger.info(f"Configuration saved to {save_path} (MT5 credentials excluded)")
             
             # Clear cache after save
             self.clear_cache()
@@ -319,12 +363,24 @@ class ConfigManager:
     @cached(cache_manager, C.CACHE_PREFIX_CONFIG, 300.0)
     def get_mt5_config(self) -> Dict[str, Any]:
         """
-        Get MetaTrader 5 configuration.
+        Get MetaTrader 5 configuration, merging environment credentials with file config.
         
         Returns:
             Dict with MT5 configuration
         """
-        return copy.deepcopy(self._config[C.CONFIG_METATRADER5])
+        # Start with non-sensitive MT5 settings from the file (e.g., timeout, portable)
+        file_mt5_config = copy.deepcopy(self._config.get(C.CONFIG_METATRADER5, {}))
+
+        # Override/add with credentials from environment variables
+        # The self._mt5_credentials already uses the C.CONFIG_MT5_XXX constants as keys
+        merged_config = {**file_mt5_config, **self._mt5_credentials}
+
+        # Ensure all required keys are present after merging, even if from env vars
+        # (path, server, login, password are validated in _load_mt5_credentials_from_env)
+        # Other keys like 'timeout', 'portable' should come from file_mt5_config
+        # and their presence is validated by the schema against the file content.
+
+        return merged_config # This is already a copy due to deepcopy and dict unpacking
     
     @cached(cache_manager, C.CACHE_PREFIX_CONFIG, 300.0)
     def get_global_settings(self) -> Dict[str, Any]:
