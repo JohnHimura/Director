@@ -184,3 +184,50 @@ def simple_mock_config():
     config.get_global_settings.return_value = { C.CONFIG_STRATEGY: { C.CONFIG_STRATEGY_TYPE: "MACD"}}
     config.get_timeframes.return_value = {"M15": "dummy"}
     return config
+
+# --- MockMT5 Integration Fixtures ---
+# Import MockMT5 class from its location
+# Assuming mock_mt5.py is in test/mocks/
+try:
+    from .mocks.mock_mt5 import MockMT5
+except ImportError: # If conftest is run from a different path context, adjust import
+    from test.mocks.mock_mt5 import MockMT5
+
+
+@pytest.fixture(scope="function") # New instance for each test function
+def mock_mt5_instance(monkeypatch):
+    """
+    Provides a fresh MockMT5 instance for each test and patches the 'mt5' import
+    in specified core modules.
+    """
+    print("Setting up mock_mt5_instance fixture")
+    mock = MockMT5()
+
+    # Modules where 'import MetaTrader5 as mt5' is used and needs patching.
+    # This ensures that these modules use our MockMT5 instance instead of the real one.
+    modules_to_patch = [
+        'core.utils.mt5_utils',    # MT5ConnectionManager in mt5_utils uses mt5 directly
+        'core.mt5_connector',      # MT5Connector uses mt5 directly
+        'core.trading_operations', # MT5TradingOperations uses mt5 directly
+        'main_bot'                 # main_bot.py might use mt5 directly (e.g. for constants like TIMEFRAME_*)
+    ]
+
+    for module_name in modules_to_patch:
+        # Patch the 'mt5' object within each specified module
+        # This makes 'module.mt5' refer to our 'mock' instance.
+        monkeypatch.setattr(f"{module_name}.mt5", mock)
+        print(f"Patched '{module_name}.mt5' with MockMT5 instance.")
+
+    # Also patch MT5_AVAILABLE flags to ensure mocked logic runs
+    monkeypatch.setattr("core.utils.mt5_utils.MT5_AVAILABLE", True)
+    monkeypatch.setattr("core.mt5_connector.MT5_AVAILABLE", True)
+    monkeypatch.setattr("core.trading_operations.MT5_AVAILABLE", True)
+    try: # main_bot might not have this flag if it only imports mt5 for constants
+        monkeypatch.setattr("main_bot.MT5_AVAILABLE", True)
+    except AttributeError:
+        pass # It's fine if main_bot doesn't have this specific flag
+
+    yield mock # Provide the configured mock instance to the test
+
+    # Teardown (monkeypatch handles teardown of its changes automatically)
+    print("Tearing down mock_mt5_instance fixture")

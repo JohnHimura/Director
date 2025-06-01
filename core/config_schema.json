@@ -40,7 +40,11 @@
             "minItems": 3,
             "maxItems": 3
           }
-        }
+        },
+        "enable_account_drawdown_kill_switch": {"type": "boolean", "default": false},
+        "max_account_drawdown_percentage": {"type": "number", "default": 10.0, "minimum": 0.1, "maximum": 100.0},
+        "close_positions_on_account_kill_switch": {"type": "boolean", "default": false},
+        "mt5_heartbeat_interval_seconds": {"type": "integer", "default": 300, "minimum": 30}
       },
       "required": [
         "max_total_trades",
@@ -55,7 +59,11 @@
         "max_daily_drawdown_percentage",
         "close_positions_on_daily_drawdown_limit",
         "enable_news_filter",
-        "high_impact_news_windows"
+        "high_impact_news_windows",
+        "enable_account_drawdown_kill_switch",
+        "max_account_drawdown_percentage",
+        "close_positions_on_account_kill_switch",
+        "mt5_heartbeat_interval_seconds"
       ]
     },
     "logging": {
@@ -85,7 +93,12 @@
           },
           "required": ["macd_fast", "macd_slow", "macd_signal", "rsi_period", "atr_period", "adx_period", "atr_multiplier"]
         },
-        "strategy_params": { # Added definition for defaults.strategy_params
+        "strategy_name": {
+          "type": "string",
+          "default": "MACDStrategy",
+          "description": "Default strategy to use if not specified per symbol."
+        },
+        "strategy_params": {
           "$ref": "#/definitions/strategy_params_properties"
         },
         "sr": {
@@ -129,9 +142,9 @@
           ]
         }
       },
-      "required": ["indicators", "sr", "risk", "strategy_params"] # Add strategy_params to required defaults
+      "required": ["indicators", "strategy_name", "sr", "risk", "strategy_params"]
     },
-    "definitions": { # Reusable definition for strategy_params
+    "definitions": {
       "strategy_params_properties": {
         "type": "object",
         "properties": {
@@ -171,6 +184,7 @@
           "type": "object",
           "properties": {
             "enabled": {"type": "boolean"},
+            "strategy_name": {"type": "string", "description": "Name of the strategy class to use for this symbol (e.g., MACDStrategy)."},
             "lot_size": {"type": "number"},
             "spread_limit_pips": {"type": "number"},
             "indicators": {
@@ -201,11 +215,11 @@
                 # Other specific risk params can be listed here if they can be overridden per symbol
               }
             },
-            "strategy_params": { # Symbol-specific strategy_params can override defaults
-              "$ref": "#/definitions/strategy_params_properties" # Reference the common definition
+            "strategy_params": {
+              "$ref": "#/definitions/strategy_params_properties"
             }
           },
-          "required": ["enabled", "lot_size", "spread_limit_pips"] # risk and strategy_params are optional here
+          "required": ["enabled", "strategy_name", "lot_size", "spread_limit_pips"]
         }
       }
     }

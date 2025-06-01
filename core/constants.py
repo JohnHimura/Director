@@ -24,6 +24,10 @@ CONFIG_KILL_SWITCH_CLOSE_POSITIONS = "kill_switch_close_positions"
 CONFIG_ENABLE_DAILY_DRAWDOWN_LIMIT = "enable_daily_drawdown_limit"
 CONFIG_MAX_DAILY_DRAWDOWN_PERCENTAGE = "max_daily_drawdown_percentage"
 CONFIG_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT = "close_positions_on_daily_drawdown_limit"
+# Account Drawdown Kill-Switch Config Keys
+CONFIG_ENABLE_ACCOUNT_DRAWDOWN_KILL_SWITCH = "enable_account_drawdown_kill_switch"
+CONFIG_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE = "max_account_drawdown_percentage"
+CONFIG_CLOSE_POSITIONS_ON_ACCOUNT_KILL_SWITCH = "close_positions_on_account_kill_switch"
 
 
 # Configuration Keys - Logging
@@ -95,6 +99,10 @@ CONFIG_MAX_TRADE_DURATION_HOURS = "max_trade_duration_hours"
 CONFIG_ENABLE_ADX_FILTER = "enable_adx_filter"
 CONFIG_ADX_THRESHOLD = "adx_threshold"
 # Note: ADX period for calculation is usually managed under CONFIG_INDICATORS section (e.g., "adx_period")
+# Account Drawdown Kill-Switch Config Keys
+CONFIG_ENABLE_ACCOUNT_DRAWDOWN_KILL_SWITCH = "enable_account_drawdown_kill_switch"
+CONFIG_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE = "max_account_drawdown_percentage"
+CONFIG_CLOSE_POSITIONS_ON_ACCOUNT_KILL_SWITCH = "close_positions_on_account_kill_switch"
 
 
 # Order Types
@@ -140,7 +148,8 @@ TF_H4 = "H4"
 TF_D1 = "D1"
 
 # Strategy settings (often under global_settings.strategy or symbol_settings.strategy_params)
-CONFIG_STRATEGY_TYPE = "type"
+CONFIG_STRATEGY_TYPE = "type" # Old key, might be replaced by CONFIG_STRATEGY_NAME per symbol
+CONFIG_STRATEGY_NAME = "strategy_name" # New key for per-symbol strategy selection
 CONFIG_STRATEGY_MIN_SIGNAL_STRENGTH = "min_signal_strength"
 
 # Cache related
@@ -227,6 +236,19 @@ DEFAULT_ADX_PERIOD = 14 # Default period for ADX calculation if not specified el
 # MT5 Connection Retry Defaults
 DEFAULT_MT5_CONNECTION_MAX_RETRIES = 5
 DEFAULT_MT5_CONNECTION_RETRY_DELAY_SECONDS = 5.0
+# Account Drawdown Kill-Switch Defaults
+DEFAULT_ENABLE_ACCOUNT_DRAWDOWN_KILL_SWITCH = False
+DEFAULT_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE = 10.0 # Default 10% account drawdown
+DEFAULT_CLOSE_POSITIONS_ON_ACCOUNT_KILL_SWITCH = False
+
+# State Variable Keys
+STATE_PEAK_EQUITY = "peak_account_equity"
+STATE_INITIAL_DAILY_BALANCE = "initial_daily_balance"
+STATE_DAILY_PNL_REALIZED = "daily_pnl_realized"
+STATE_LAST_RESET_DATE = "last_reset_date"
+
+# Default strategy name
+DEFAULT_STRATEGY_NAME = "MACDStrategy" # Example default
 
 
 LOT_SIZE = "lot_size" # Key for RiskManager output, matches CONFIG_LOT_SIZE

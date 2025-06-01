@@ -1,236 +1,235 @@
-"""
-Tests for the MT5TradingOperations class.
-"""
 import pytest
-from unittest.mock import MagicMock, patch
-import time
+from unittest.mock import MagicMock, call # call is not used yet but might be
 
-# Assume constants are in core.constants
-from core import constants as C
-# Classes to be tested or mocked
 from core.trading_operations import MT5TradingOperations
-from core.config_manager import ConfigManager # For mock
-from core.mt5_connector import MT5Connector # For mock
+from core.mt5_connector import MT5Connector
+from core.config_manager import ConfigManager
+from core import constants as C
+# Import MockMT5 for type hinting and direct configuration in tests
+from test.mocks.mock_mt5 import MockMT5, TRADE_RETCODE_DONE, ORDER_TYPE_BUY, ORDER_TYPE_SELL, TRADE_ACTION_DEAL, TRADE_ACTION_SLTP
 
-# Mock the MetaTrader5 library
-# This allows testing without having MT5 installed or running.
-# We need to mock specific functions that trading_operations uses.
-mt5_mock = MagicMock()
-mt5_mock.TRADE_RETCODE_DONE = C.RETCODE_DONE # 10009
-mt5_mock.ORDER_TYPE_BUY = 0 # Actual MT5 value
-mt5_mock.ORDER_TYPE_SELL = 1 # Actual MT5 value
-mt5_mock.TRADE_ACTION_DEAL = 1
-mt5_mock.TRADE_ACTION_SLTP = 6
-mt5_mock.ORDER_TIME_GTC = 0
-mt5_mock.ORDER_FILLING_FOK = 1
-
+# Constants for MT5 that might be used if not importing from MockMT5 directly in every test
+# However, MockMT5 provides these as class attributes which is convenient.
 
 @pytest.fixture
-def mock_config_manager_for_ops():
-    """Mocks ConfigManager for trading operations tests."""
+def mock_config_for_ops():
+    """Provides a mock ConfigManager, focused on settings relevant to TradingOperations."""
     mock = MagicMock(spec=ConfigManager)
+    # Default to real trading; tests can override this by modifying the return_value
     mock.get_global_settings.return_value = {
         C.CONFIG_PAPER_TRADING: False,
         C.CONFIG_MAGIC_NUMBER: C.DEFAULT_MAGIC_NUMBER,
         C.CONFIG_MAX_SLIPPAGE_POINTS: C.DEFAULT_MAX_SLIPPAGE_POINTS,
-        C.CONFIG_KILL_SWITCH_FILE_PATH: "KILL_SWITCH.txt", # Keep default path
-        C.CONFIG_KILL_SWITCH_CLOSE_POSITIONS: True
+    }
+    # MT5 config is needed by MT5Connector
+    mock.get_mt5_config.return_value = {
+        C.CONFIG_MT5_PATH: "dummy_path", C.CONFIG_MT5_SERVER: "dummy_server",
+        C.CONFIG_MT5_LOGIN: 12345, C.CONFIG_MT5_PASSWORD: "pwd",
+        C.CONFIG_MT5_TIMEOUT: 60000, C.CONFIG_MT5_PORTABLE: False,
+        C.CONFIG_MT5_CONNECTION_MAX_RETRIES: 1,
+        C.CONFIG_MT5_CONNECTION_RETRY_DELAY: 0.01 # Fast retries for tests
     }
     return mock
 
 @pytest.fixture
-def mock_mt5_connector(mock_config_manager_for_ops):
-    """Mocks MT5Connector."""
-    mock = MagicMock(spec=MT5Connector)
-    mock.config = mock_config_manager_for_ops # Attach the config mock to connector mock
-    # Mock methods used by MT5TradingOperations if any (e.g., _ensure_connection, get_symbol_price)
-    mock._ensure_connection.return_value = True
-    mock.get_symbol_price.return_value = {'ask': 1.1000, 'bid': 1.0990}
-    return mock
+def mt5_connector_with_mock_lib(mock_config_for_ops, mock_mt5_instance: MockMT5):
+    """
+    Provides a real MT5Connector instance that uses the MockMT5 library instance
+    (due to patching by mock_mt5_instance fixture from conftest.py).
+    """
+    # mock_mt5_instance from conftest has already patched 'core.mt5_connector.mt5'
+    # So, when MT5Connector() is created, it will use MockMT5.
+    connector = MT5Connector(config=mock_config_for_ops, is_kill_switch_active_func=lambda: False)
+    # Ensure the connector uses our specific mock_mt5_instance if the patching was general
+    # This is usually handled by monkeypatch in conftest.py by patching the mt5 import
+    # where MT5Connector looks for it.
+
+    # Allow tests to access the underlying MockMT5 instance via the connector if needed,
+    # though ideally, they configure mock_mt5_instance directly.
+    connector.mt5_lib = mock_mt5_instance # For direct access if a test needs to verify calls on the lib used by connector
+    return connector
 
 @pytest.fixture
-def trading_ops_paper_on(mock_mt5_connector):
-    """Fixture for MT5TradingOperations with paper trading ON."""
-    # Override paper_trading setting for this fixture
-    mock_mt5_connector.config.get_global_settings.return_value[C.CONFIG_PAPER_TRADING] = True
-
-    # is_kill_switch_active_func will be provided by the MT5Connector mock if needed by TradingOps directly
-    # For now, trading_ops gets it from its connector.
-    # Let's make the connector's kill switch function return False by default for these tests
-    mock_mt5_connector.is_kill_switch_active = MagicMock(return_value=False)
-
-    return MT5TradingOperations(mock_mt5_connector, mock_mt5_connector.is_kill_switch_active)
+def trading_ops_paper_on(mt5_connector_with_mock_lib: MT5Connector):
+    mt5_connector_with_mock_lib.config_manager.get_global_settings.return_value[C.CONFIG_PAPER_TRADING] = True
+    return MT5TradingOperations(mt5_connector_with_mock_lib, mt5_connector_with_mock_lib.is_kill_switch_active)
 
 @pytest.fixture
-def trading_ops_paper_off(mock_mt5_connector):
-    """Fixture for MT5TradingOperations with paper trading OFF."""
-    mock_mt5_connector.config.get_global_settings.return_value[C.CONFIG_PAPER_TRADING] = False
-    mock_mt5_connector.is_kill_switch_active = MagicMock(return_value=False)
-    return MT5TradingOperations(mock_mt5_connector, mock_mt5_connector.is_kill_switch_active)
+def trading_ops_paper_off(mt5_connector_with_mock_lib: MT5Connector):
+    mt5_connector_with_mock_lib.config_manager.get_global_settings.return_value[C.CONFIG_PAPER_TRADING] = False
+    return MT5TradingOperations(mt5_connector_with_mock_lib, mt5_connector_with_mock_lib.is_kill_switch_active)
 
 @pytest.fixture
-def trading_ops_kill_switch_on(mock_mt5_connector):
-    """Fixture for MT5TradingOperations with kill switch ON (via connector)."""
-    mock_mt5_connector.config.get_global_settings.return_value[C.CONFIG_PAPER_TRADING] = False # Real trading
-    mock_mt5_connector.is_kill_switch_active = MagicMock(return_value=True) # Kill switch is active
-    return MT5TradingOperations(mock_mt5_connector, mock_mt5_connector.is_kill_switch_active)
+def trading_ops_kill_switch_on(mt5_connector_with_mock_lib: MT5Connector):
+    # Modify the connector's kill switch function for this specific trading_ops instance
+    mt5_connector_with_mock_lib.is_kill_switch_active = lambda: True
+    ops = MT5TradingOperations(mt5_connector_with_mock_lib, mt5_connector_with_mock_lib.is_kill_switch_active)
+    return ops
+
 
 # Test Paper Trading Mode
-@patch('core.trading_operations.mt5', mt5_mock) # Patch mt5 globally for these tests
-@patch('core.trading_operations.logger') # Patch logger to check calls
-def test_open_position_paper_trading(mock_logger, trading_ops_paper_on):
+def test_open_position_paper_trading(trading_ops_paper_on: MT5TradingOperations, mock_mt5_instance: MockMT5, caplog):
     result = trading_ops_paper_on.open_position("EURUSD", C.ORDER_TYPE_BUY, 0.1, comment="Test paper buy")
     assert result[C.POSITION_TICKET] > 0
-    assert result['retcode'] == C.RETCODE_DONE
+    assert result['retcode'] == TRADE_RETCODE_DONE
     assert C.PAPER_TRADE_COMMENT_PREFIX in result[C.REQUEST_COMMENT]
-    mock_logger.info.assert_any_call(pytest.string_containing(f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating OPEN position"))
-    mt5_mock.order_send.assert_not_called()
+    assert f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating OPEN position" in caplog.text
+    mock_mt5_instance.order_send.assert_not_called()
 
-@patch('core.trading_operations.mt5', mt5_mock)
-@patch('core.trading_operations.logger')
-def test_close_position_paper_trading(mock_logger, trading_ops_paper_on):
+def test_close_position_paper_trading(trading_ops_paper_on: MT5TradingOperations, mock_mt5_instance: MockMT5, caplog):
     result = trading_ops_paper_on.close_position(12345, comment="Test paper close")
-    assert result[C.POSITION_TICKET] > 0 # Returns a new dummy ticket
-    assert result['retcode'] == C.RETCODE_DONE
+    assert result[C.POSITION_TICKET] > 0
+    assert result['retcode'] == TRADE_RETCODE_DONE
     assert C.PAPER_TRADE_COMMENT_PREFIX in result[C.REQUEST_COMMENT]
-    mock_logger.info.assert_any_call(pytest.string_containing(f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating CLOSE position"))
-    mt5_mock.order_send.assert_not_called()
+    assert f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating CLOSE position" in caplog.text
+    mock_mt5_instance.order_send.assert_not_called()
 
-@patch('core.trading_operations.mt5', mt5_mock)
-@patch('core.trading_operations.logger')
-def test_modify_position_paper_trading(mock_logger, trading_ops_paper_on):
+def test_modify_position_paper_trading(trading_ops_paper_on: MT5TradingOperations, mock_mt5_instance: MockMT5, caplog):
     result = trading_ops_paper_on.modify_position(12345, stop_loss=1.0800, take_profit=1.1200)
     assert result[C.POSITION_TICKET] == 12345
-    assert result['retcode'] == C.RETCODE_DONE
+    assert result['retcode'] == TRADE_RETCODE_DONE
     assert C.PAPER_TRADE_COMMENT_PREFIX in result[C.REQUEST_COMMENT]
-    mock_logger.info.assert_any_call(pytest.string_containing(f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating MODIFY position"))
-    mt5_mock.order_send.assert_not_called()
+    assert f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating MODIFY position" in caplog.text
+    mock_mt5_instance.order_send.assert_not_called()
 
 # Test Kill Switch
-@patch('core.trading_operations.mt5', mt5_mock)
-@patch('core.trading_operations.logger')
-def test_open_position_kill_switch_active(mock_logger, trading_ops_kill_switch_on):
+def test_open_position_kill_switch_active(trading_ops_kill_switch_on: MT5TradingOperations, mock_mt5_instance: MockMT5, caplog):
     result = trading_ops_kill_switch_on.open_position("EURUSD", C.ORDER_TYPE_BUY, 0.1)
-    assert result['retcode'] == -1 # Custom kill switch retcode
+    assert result['retcode'] == -1
     assert "aborted by kill switch" in result[C.REQUEST_COMMENT]
-    mock_logger.critical.assert_called_with("Kill switch is active. Open position operation aborted.")
-    mt5_mock.order_send.assert_not_called()
+    assert "Kill switch is active. Open position operation aborted." in caplog.text
+    mock_mt5_instance.order_send.assert_not_called()
 
-@patch('core.trading_operations.mt5', mt5_mock)
-@patch('core.trading_operations.logger')
-def test_close_position_kill_switch_active_no_bypass(mock_logger, trading_ops_kill_switch_on):
+def test_close_position_kill_switch_active_no_bypass(trading_ops_kill_switch_on: MT5TradingOperations, mock_mt5_instance: MockMT5, caplog):
     result = trading_ops_kill_switch_on.close_position(12345) # No bypass
     assert result['retcode'] == -1
     assert "aborted by kill switch" in result[C.REQUEST_COMMENT]
-    mock_logger.critical.assert_called_with("Kill switch is active. Close position operation for ticket 12345 aborted.")
-    mt5_mock.order_send.assert_not_called()
+    assert "Kill switch is active. Close position operation for ticket 12345 aborted." in caplog.text
+    mock_mt5_instance.order_send.assert_not_called()
 
-@patch('core.trading_operations.mt5', mt5_mock) # Mock the mt5 library import
-@patch('core.trading_operations.logger')
-def test_close_position_kill_switch_active_with_bypass(mock_logger, trading_ops_kill_switch_on, mock_mt5_connector):
-    # For this test, we need the kill switch to be active via the connector's function,
-    # but trading_ops should proceed because bypass_kill_switch=True.
-    # We also need to mock a successful mt5.positions_get and mt5.order_send for the close.
+def test_close_position_kill_switch_active_with_bypass(trading_ops_kill_switch_on: MT5TradingOperations, mock_mt5_instance: MockMT5, caplog):
+    ticket_to_close = 12345
+    symbol = "EURUSD"
+    # Setup MockMT5 to return an open position
+    mock_mt5_instance.add_open_position({
+        'ticket': ticket_to_close, 'symbol': symbol, 'volume': 0.1,
+        'type': ORDER_TYPE_BUY, 'price_open': 1.1000, 'magic': 12345
+    })
+    # Mock get_symbol_price used by TradingOps for closing price
+    trading_ops_kill_switch_on.connector.get_symbol_price.return_value = {'bid': 1.1010, 'ask': 1.1012}
+    # Configure a successful order_send response from MockMT5
+    mock_mt5_instance.order_send_should_fail = False
+    mock_mt5_instance.order_send.return_value = MagicMock(
+        retcode=TRADE_RETCODE_DONE, comment="Closed by test (bypass)", order=78910, profit=10.0
+    )
 
-    # Setup: Connector's kill switch is ON
-    trading_ops_kill_switch_on.is_kill_switch_active = MagicMock(return_value=True)
+    result = trading_ops_kill_switch_on.close_position(ticket_to_close, bypass_kill_switch=True)
 
-    # Mock mt5.positions_get to return a dummy position
-    dummy_position = MagicMock()
-    dummy_position._asdict.return_value = {
-        C.POSITION_TICKET: 12345, C.POSITION_SYMBOL: "EURUSD", C.POSITION_VOLUME: 0.1,
-        C.POSITION_TYPE: mt5_mock.ORDER_TYPE_BUY, C.POSITION_MAGIC: 123456,
-        C.POSITION_SL: 0.0, C.POSITION_TP: 0.0
-    }
-    mt5_mock.positions_get.return_value = [dummy_position]
+    assert result['retcode'] == TRADE_RETCODE_DONE
+    assert result[C.REQUEST_COMMENT] == "Closed by test (bypass)"
+    # Ensure critical log about KS abortion is NOT present for this call
+    for record in caplog.records:
+        if record.levelname == "CRITICAL" and "aborted by kill switch" in record.message:
+            assert False, "Critical kill switch log found despite bypass"
+    mock_mt5_instance.order_send.assert_called_once()
 
-    # Mock mt5.order_send for a successful close
-    mt5_order_send_result_mock = MagicMock()
-    mt5_order_send_result_mock.retcode = C.RETCODE_DONE
-    mt5_order_send_result_mock.comment = "Closed by test"
-    mt5_order_send_result_mock.order = 78910 # New ticket for the closing order
-    mt5_mock.order_send.return_value = mt5_order_send_result_mock
-
-    result = trading_ops_kill_switch_on.close_position(12345, bypass_kill_switch=True)
-
-    assert result['retcode'] == C.RETCODE_DONE
-    assert result[C.REQUEST_COMMENT] == "Closed by test"
-    mock_logger.critical.assert_not_called() # Should not log "aborted by kill switch"
-    mt5_mock.order_send.assert_called_once() # Should be called because bypassed
-
-@patch('core.trading_operations.mt5', mt5_mock)
-@patch('core.trading_operations.logger')
-def test_modify_position_kill_switch_active(mock_logger, trading_ops_kill_switch_on):
+def test_modify_position_kill_switch_active(trading_ops_kill_switch_on: MT5TradingOperations, mock_mt5_instance: MockMT5, caplog):
     result = trading_ops_kill_switch_on.modify_position(12345, stop_loss=1.0800)
     assert result['retcode'] == -1
     assert "aborted by kill switch" in result[C.REQUEST_COMMENT]
-    mock_logger.critical.assert_called_with("Kill switch is active. Modify position operation for ticket 12345 aborted.")
-    mt5_mock.order_send.assert_not_called()
+    assert "Kill switch is active. Modify position operation for ticket 12345 aborted." in caplog.text
+    mock_mt5_instance.order_send.assert_not_called()
 
-# TODO: Add tests for real trading mode (paper_trading=False, kill_switch=False)
-# These will involve more complex mocking of mt5.order_send results (success, various errors)
-# and mt5.positions_get.
+# Test Real Trading Mode
+def test_open_position_real_trading_success(trading_ops_paper_off: MT5TradingOperations, mock_mt5_instance: MockMT5):
+    symbol = "EURUSD"
+    order_type_enum = ORDER_TYPE_SELL
+    volume = 0.05
+    price = 1.1000
+    expected_order_ticket = 67890
 
-# Example for real trading open_position success
-@patch('core.trading_operations.mt5', mt5_mock)
-@patch('core.trading_operations.logger')
-def test_open_position_real_trading_success(mock_logger, trading_ops_paper_off):
-    mt5_order_send_result_mock = MagicMock()
-    mt5_order_send_result_mock.retcode = C.RETCODE_DONE
-    mt5_order_send_result_mock.comment = "Real trade success"
-    mt5_order_send_result_mock.order = 67890
-    mt5_mock.order_send.return_value = mt5_order_send_result_mock
+    mock_mt5_instance.order_send_should_fail = False
+    # MockMT5's order_send will now use its internal logic to generate a result
+    # We can pre-configure symbol state if needed for price fetching by order_send
+    mock_mt5_instance.add_symbol_info(symbol, {'ask': 1.1002, 'bid': 1.1000, 'point': 0.00001, 'trade_contract_size': 100000})
 
-    result = trading_ops_paper_off.open_position("EURUSD", C.ORDER_TYPE_SELL, 0.05, price=1.1000, comment="Test real sell")
+    result = trading_ops_paper_off.open_position(symbol, C.ORDER_TYPE_SELL, volume, price=price, comment="Test real sell")
 
-    assert result[C.POSITION_TICKET] == 67890
-    assert result['retcode'] == C.RETCODE_DONE
-    assert result[C.REQUEST_COMMENT] == "Real trade success"
-    mt5_mock.order_send.assert_called_once()
-    # Check that deviation was fetched from config
-    args, kwargs = mt5_mock.order_send.call_args
-    sent_request = args[0]
-    assert sent_request[C.REQUEST_DEVIATION] == C.DEFAULT_MAX_SLIPPAGE_POINTS
+    # The ticket ID is now generated by MockMT5's order_send
+    assert result[C.POSITION_TICKET] > 0 # Check if a ticket was assigned
+    assert result['retcode'] == TRADE_RETCODE_DONE
+    mock_mt5_instance.order_send.assert_called_once()
+    request_arg = mock_mt5_instance.order_send.call_args[0][0]
+    assert request_arg[C.REQUEST_DEVIATION] == C.DEFAULT_MAX_SLIPPAGE_POINTS # Check config usage
 
-# Example for real trading open_position with specific MT5 error
-@patch('core.trading_operations.mt5', mt5_mock)
-@patch('core.trading_operations.logger')
-def test_open_position_real_trading_mt5_error_requote(mock_logger, trading_ops_paper_off):
-    mt5_order_send_result_mock = MagicMock()
-    # Simulate a REQUOTE error from MT5
-    mt5_mock.TRADE_RETCODE_REQUOTE = 10004 # Actual MT5 value for requote
-    mt5_order_send_result_mock.retcode = mt5_mock.TRADE_RETCODE_REQUOTE
-    mt5_order_send_result_mock.comment = "Requote"
-    mt5_order_send_result_mock.order = 0 # No ticket on requote
-    mt5_mock.order_send.return_value = mt5_order_send_result_mock
+def test_open_position_real_trading_mt5_error_requote(trading_ops_paper_off: MT5TradingOperations, mock_mt5_instance: MockMT5):
+    # Configure MockMT5 to simulate a requote error
+    mock_mt5_instance.order_send_should_fail = True
+    mock_mt5_instance.order_send_fail_retcode = MockMT5.TRADE_RETCODE_REQUOTE # Use constant from MockMT5
+    mock_mt5_instance.order_send_fail_message = "Requote"
 
-    with pytest.raises(Exception) as excinfo: # Assuming OperationError is raised
+    with pytest.raises(Exception) as excinfo: # MT5TradingOperations raises OperationError
         trading_ops_paper_off.open_position("EURUSD", C.ORDER_TYPE_BUY, 0.1, comment="Test requote")
 
-    assert "Order failed: Code=10004" in str(excinfo.value)
+    assert "Order failed: Code=10004" in str(excinfo.value) # 10004 is requote
     assert "Requote" in str(excinfo.value)
-    mt5_mock.order_send.assert_called_once()
+    mock_mt5_instance.order_send.assert_called_once()
+
+def test_open_position_real_trading_general_error(trading_ops_paper_off: MT5TradingOperations, mock_mt5_instance: MockMT5):
+    # Configure MockMT5 to simulate a generic error
+    mock_mt5_instance.order_send_should_fail = True
+    mock_mt5_instance.order_send_fail_retcode = 10008 # TRADE_RETCODE_ERROR or some other generic error
+    mock_mt5_instance.order_send_fail_message = "Generic MT5 Error"
+
+    mock_mt5_instance.add_symbol_info("EURUSD", {'ask': 1.1002, 'bid': 1.1000, 'point': 0.00001, 'trade_contract_size': 100000})
+
+    with pytest.raises(Exception) as excinfo: # MT5TradingOperations raises OperationError
+        trading_ops_paper_off.open_position("EURUSD", C.ORDER_TYPE_BUY, 0.1, comment="Test generic error")
+
+    assert f"Order failed: Code={mock_mt5_instance.order_send_fail_retcode}" in str(excinfo.value)
+    assert mock_mt5_instance.order_send_fail_message in str(excinfo.value)
+    mock_mt5_instance.order_send.assert_called_once()
+
+def test_close_position_real_trading_profit_calculation(trading_ops_paper_off: MT5TradingOperations, mock_mt5_instance: MockMT5, mt5_connector_with_mock_lib: MT5Connector):
+    ticket_to_close = 12345
+    symbol = "EURUSD"
+    open_price = 1.10000
+    close_price = 1.10100 # 10 pips profit for a BUY
+    volume = 0.1
+    expected_profit = 10.0 # Example profit
+
+    # Setup MockMT5 to return an open position
+    mock_mt5_instance.add_open_position({
+        'ticket': ticket_to_close, 'symbol': symbol, 'volume': volume,
+        'type': ORDER_TYPE_BUY, 'price_open': open_price, 'magic': 12345
+    })
+
+    # Mock get_symbol_price used by TradingOps for determining closing price for request
+    # The connector instance used by trading_ops_paper_off is mt5_connector_with_mock_lib
+    mt5_connector_with_mock_lib.get_symbol_price.return_value = {'bid': close_price, 'ask': close_price + 0.00002} # Closing a BUY uses BID
+
+    # Configure MockMT5 for successful closure order_send
+    closing_order_ticket = 78910
+    mock_mt5_instance.order_send_should_fail = False
+    mock_mt5_instance.order_send.return_value = MagicMock(
+        retcode=TRADE_RETCODE_DONE, comment="Position closed", order=closing_order_ticket
+    )
+
+    # Configure MockMT5 history_deals_get to return a deal with profit
+    mock_deal = MagicMock()
+    mock_deal.profit = expected_profit
+    mock_deal.commission = -0.1 # example
+    mock_deal.swap = 0.0
+    mock_deal.order = closing_order_ticket # Link deal to the closing order
+    mock_mt5_instance.history_deals_get.return_value = [mock_deal]
+
+    # Mock time.sleep in trading_operations if it's called
+    with patch('core.trading_operations.time.sleep'): # Patch time.sleep where it's used
+        result = trading_ops_paper_off.close_position(ticket_to_close, comment="test close with profit")
+
+    assert result['retcode'] == TRADE_RETCODE_DONE
+    assert result['profit'] == expected_profit + mock_deal.commission + mock_deal.swap
+    mock_mt5_instance.order_send.assert_called_once()
+    mock_mt5_instance.history_deals_get.assert_called_once_with(order=closing_order_ticket)
 
 ```
-
-I've created `test/test_trading_operations.py` with:
-*   Mocking for `mt5` library itself.
-*   Fixtures for `ConfigManager` (mocked), `MT5Connector` (mocked), and `MT5TradingOperations` in different states (paper trading on/off, kill switch on).
-*   **Paper Trading Tests**:
-    *   `test_open_position_paper_trading`
-    *   `test_close_position_paper_trading`
-    *   `test_modify_position_paper_trading`
-    *   These verify that simulated success is returned, correct logs are made, and `mt5.order_send` is NOT called.
-*   **Kill Switch Tests**:
-    *   `test_open_position_kill_switch_active`
-    *   `test_close_position_kill_switch_active_no_bypass`
-    *   `test_close_position_kill_switch_active_with_bypass` (this one is more complex due to needing to mock position data for the close to proceed)
-    *   `test_modify_position_kill_switch_active`
-    *   These verify that operations are blocked (or allowed if bypassed) and appropriate logs/return values occur.
-*   **Real Trading Examples (Minimal for now)**:
-    *   `test_open_position_real_trading_success`: Mocks a successful `mt5.order_send`.
-    *   `test_open_position_real_trading_mt5_error_requote`: Mocks an `mt5.order_send` that returns a "requote" error.
-
-This provides initial coverage for `MT5TradingOperations`, focusing on paper trading and kill switch. More tests for various MT5 error codes and successful operation details in real mode can be added.
-
-Next, I'll focus on enhancing tests for `core/strategy_engine.py`, particularly for `MACDStrategy`'s logic.
