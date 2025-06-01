@@ -7,7 +7,7 @@ import time
 import sys
 import json
 import uuid # Import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # Import timezone
 from typing import Dict, List, Optional, Any, Tuple
 import pandas as pd
 import MetaTrader5 as mt5
@@ -39,15 +39,31 @@ class TradingBot:
         """
         self.config_manager = ConfigManager(config_path)
         
+        global_settings = self.config_manager.get_global_settings()
+
         # Kill switch state
         self.kill_switch_activated = False
-        self._kill_switch_file_path_str = self.config_manager.get_global_settings().get(C.CONFIG_KILL_SWITCH_FILE_PATH, "KILL_SWITCH.txt")
+        self._kill_switch_file_path_str = global_settings.get(C.CONFIG_KILL_SWITCH_FILE_PATH, "KILL_SWITCH.txt")
         self._kill_switch_file = Path(self._kill_switch_file_path_str)
-        self._kill_switch_close_positions = self.config_manager.get_global_settings().get(C.CONFIG_KILL_SWITCH_CLOSE_POSITIONS, True)
+        self._kill_switch_close_positions = global_settings.get(C.CONFIG_KILL_SWITCH_CLOSE_POSITIONS, True)
+
+        # Daily Drawdown state
+        self.daily_pnl_realized = 0.0
+        self.initial_daily_balance_for_drawdown = 0.0
+        self.daily_drawdown_limit_hit_today = False
+        self.enable_daily_drawdown_limit = global_settings.get(C.CONFIG_ENABLE_DAILY_DRAWDOWN_LIMIT, C.DEFAULT_ENABLE_DAILY_DRAWDOWN_LIMIT)
+        self.max_daily_drawdown_percentage = global_settings.get(C.CONFIG_MAX_DAILY_DRAWDOWN_PERCENTAGE, C.DEFAULT_MAX_DAILY_DRAWDOWN_PERCENTAGE)
+        self.close_positions_on_dd_limit = global_settings.get(C.CONFIG_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT, C.DEFAULT_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT)
+
+        # News Filter state
+        self.enable_news_filter = global_settings.get(C.CONFIG_ENABLE_NEWS_FILTER, C.DEFAULT_ENABLE_NEWS_FILTER)
+        self.high_impact_news_windows_config = global_settings.get(C.CONFIG_HIGH_IMPACT_NEWS_WINDOWS, [])
+        self.parsed_news_windows = []
+        self._parse_news_windows(self.high_impact_news_windows_config)
 
 
         # Initialize components
-        self.mt5 = MT5Connector(self.config_manager, self.is_kill_switch_active) # Pass callable
+        self.mt5 = MT5Connector(self.config_manager, self.is_kill_switch_active)
         self.strategy = StrategyEngine(self.config_manager)
         
         # Get active symbols
@@ -215,7 +231,20 @@ class TradingBot:
             restart_recommended = True
 
         if C.RELOAD_CHANGES_GLOBAL_SETTINGS in changes:
-            logger.info(f"Global settings changed: {changes[C.RELOAD_CHANGES_GLOBAL_SETTINGS]}. RiskManager will be updated.")
+            logger.info(f"Global settings changed: {changes[C.RELOAD_CHANGES_GLOBAL_SETTINGS]}. RiskManager and bot attributes will be updated.")
+            # Re-load global settings that might have changed
+            new_global_settings = self.config_manager.get_global_settings()
+            self.enable_daily_drawdown_limit = new_global_settings.get(C.CONFIG_ENABLE_DAILY_DRAWDOWN_LIMIT, C.DEFAULT_ENABLE_DAILY_DRAWDOWN_LIMIT)
+            self.max_daily_drawdown_percentage = new_global_settings.get(C.CONFIG_MAX_DAILY_DRAWDOWN_PERCENTAGE, C.DEFAULT_MAX_DAILY_DRAWDOWN_PERCENTAGE)
+            self.close_positions_on_dd_limit = new_global_settings.get(C.CONFIG_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT, C.DEFAULT_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT)
+
+            self.enable_news_filter = new_global_settings.get(C.CONFIG_ENABLE_NEWS_FILTER, C.DEFAULT_ENABLE_NEWS_FILTER)
+            new_news_windows = new_global_settings.get(C.CONFIG_HIGH_IMPACT_NEWS_WINDOWS, [])
+            if self.high_impact_news_windows_config != new_news_windows: # Check if news windows specifically changed
+                logger.info("High-impact news windows configuration changed. Re-parsing.")
+                self.high_impact_news_windows_config = new_news_windows
+                self._parse_news_windows(self.high_impact_news_windows_config)
+
             if hasattr(self.risk_manager, 'update_config') and callable(getattr(self.risk_manager, 'update_config')):
                  self.risk_manager.update_config()
 
@@ -285,36 +314,69 @@ class TradingBot:
                 return # Skip the rest of the iteration's trading logic
 
             current_date = datetime.now().date()
+            current_date = datetime.now().date()
             if self.last_reset_date != current_date:
-                logger.info("New trading day detected. Resetting daily risk statistics.")
-                if hasattr(self.risk_manager, 'reset_daily_stats'):
-                    self.risk_manager.reset_daily_stats()
+                logger.info("New trading day detected. Resetting daily P&L and drawdown status.")
+                account_info_new_day = self._get_account_info() # Get fresh info
+                self.initial_daily_balance_for_drawdown = account_info_new_day.get(C.ACCOUNT_EQUITY, 0.0) # Use Equity for DD calc
+                self.daily_pnl_realized = 0.0
+                self.daily_drawdown_limit_hit_today = False
                 self.last_reset_date = current_date
+                logger.info(f"Initial balance for drawdown today: {self.initial_daily_balance_for_drawdown:.2f}")
+                if hasattr(self.risk_manager, 'reset_daily_stats'):
+                    self.risk_manager.reset_daily_stats() # RiskManager might have its own daily stats like trade counts
 
-            # Update account info
+            # Update account info (might be redundant if just fetched, but good for consistency)
             account_info = self._get_account_info()
+            current_equity = account_info.get(C.ACCOUNT_EQUITY, 0.0)
+            # P&L for drawdown can be based on equity change from start of day if not tracking realized P&L precisely from trades
+            # For this task, we are asked to track daily_pnl_realized from closed trades.
+            # So, self.daily_pnl_realized is updated in self._close_position wrapper.
+
             if hasattr(self.risk_manager, 'update_account_info'):
                 self.risk_manager.update_account_info(account_info)
 
-            # Check if we can trade - ensure risk_manager is updated with latest config for limits
-            can_trade, reason = True, "" # Default
-            if hasattr(self.risk_manager, 'check_daily_limits'):
-                can_trade, reason = self.risk_manager.check_daily_limits()
+            # Check Daily Drawdown Limit based on REALIZED P&L
+            if self.enable_daily_drawdown_limit and not self.daily_drawdown_limit_hit_today:
+                max_loss_amount = self.initial_daily_balance_for_drawdown * (self.max_daily_drawdown_percentage / 100.0)
+                if self.daily_pnl_realized < 0 and abs(self.daily_pnl_realized) >= max_loss_amount:
+                    self.daily_drawdown_limit_hit_today = True
+                    logger.critical(
+                        f"DAILY DRAWDOWN LIMIT REACHED! Realized P&L: {self.daily_pnl_realized:.2f}, "
+                        f"Max Loss Amount: {max_loss_amount:.2f}, Initial Daily Balance: {self.initial_daily_balance_for_drawdown:.2f}"
+                    )
+                    if self.close_positions_on_dd_limit:
+                        logger.info("Closing all open positions due to daily drawdown limit.")
+                        open_positions, _, _ = self.mt5.get_open_positions(bypass_kill_switch=True) # Bypass KS for DD closure
+                        for pos_dict in open_positions:
+                            self._close_position(pos_dict, "Daily drawdown limit closure", bypass_dd_check=True) # Add bypass for DD check in _close_position
 
-            if not can_trade:
-                logger.warning("Trading limited: %s", reason)
+            if self.daily_drawdown_limit_hit_today:
+                logger.warning("Daily drawdown limit hit. No new trades will be initiated for the rest of the day.")
+                # Skip further trading actions for the day
+                # (except for essential monitoring or manual intervention if added later)
+                return
+
+            # Check general trading limits from RiskManager (e.g., max total trades per day if different from DD trades)
+            can_trade_risk_mgr, reason_risk_mgr = True, ""
+            if hasattr(self.risk_manager, 'check_daily_limits'): # This method in RM might track # of trades
+                can_trade_risk_mgr, reason_risk_mgr = self.risk_manager.check_daily_limits()
+
+            if not can_trade_risk_mgr:
+                logger.warning(f"Trading limited by RiskManager: {reason_risk_mgr}")
                 return
 
             # Process each symbol
             for symbol_name, symbol_config_dict in self.symbols.items():
-                # Use C.CONFIG_ENABLED
                 if symbol_config_dict.get(C.CONFIG_ENABLED, False):
+                    if self.daily_drawdown_limit_hit_today: # Re-check before processing each symbol
+                        logger.info(f"Skipping symbol {symbol_name} as daily drawdown limit is hit.")
+                        continue
                     try:
                         self._process_symbol(symbol_name, symbol_config_dict)
                     except Exception as e:
-                        logger.exception("Error processing symbol %s", symbol_name)
+                        logger.exception(f"Error processing symbol {symbol_name}")
         finally:
-            # Clear correlation_id at the end of the iteration (optional, good practice)
             if hasattr(log_ctx, 'correlation_id'):
                 del log_ctx.correlation_id
 
@@ -418,9 +480,45 @@ class TradingBot:
         if not positions_list:
             if self.kill_switch_activated:
                 logger.warning(f"Kill switch active, skipping new entry check for {symbol}.")
+            elif self.daily_drawdown_limit_hit_today: # Check DD limit before entries
+                logger.warning(f"Daily drawdown limit hit, skipping new entry check for {symbol}.")
             else:
                 self._check_for_entries(symbol, data, symbol_config, current_open_positions_list)
     
+    def _parse_news_windows(self, news_windows_config: List[List[str]]):
+        """Parses news window strings from config into datetime objects."""
+        self.parsed_news_windows = []
+        for window_entry in news_windows_config:
+            if len(window_entry) == 3:
+                str_start, str_end, event_name = window_entry
+                try:
+                    # Assuming naive datetime for now, matching datetime.now() without tz for simplicity
+                    # For UTC-based comparison:
+                    # start_dt = datetime.strptime(str_start, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    # end_dt = datetime.strptime(str_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    start_dt = datetime.strptime(str_start, "%Y-%m-%d %H:%M:%S")
+                    end_dt = datetime.strptime(str_end, "%Y-%m-%d %H:%M:%S")
+                    if start_dt >= end_dt:
+                        logger.error(f"Malformed news window: start time {str_start} is not before end time {str_end} for event '{event_name}'. Skipping.")
+                        continue
+                    self.parsed_news_windows.append((start_dt, end_dt, event_name))
+                except ValueError as e:
+                    logger.error(f"Malformed date string in news window entry: {window_entry}. Error: {e}. Skipping.")
+            else:
+                logger.error(f"Malformed news window entry (expected 3 items): {window_entry}. Skipping.")
+        logger.info(f"Parsed {len(self.parsed_news_windows)} news windows.")
+
+    def _is_within_news_blackout_period(self) -> Tuple[bool, Optional[str]]:
+        """Checks if the current time is within any defined news blackout window."""
+        # Use naive datetime for comparison if parsed_news_windows are naive
+        # For UTC comparison: current_dt = datetime.now(timezone.utc)
+        current_dt = datetime.now()
+        for start_dt, end_dt, event_name in self.parsed_news_windows:
+            if start_dt <= current_dt <= end_dt:
+                logger.info(f"Current time {current_dt.strftime('%Y-%m-%d %H:%M:%S')} is within news blackout for event: '{event_name}' ({start_dt.strftime('%Y-%m-%d %H:%M:%S')} - {end_dt.strftime('%Y-%m-%d %H:%M:%S')})")
+                return True, event_name
+        return False, None
+
     def _get_market_data(self, symbol: str) -> Dict[str, pd.DataFrame]:
         """
         Get market data for a symbol across all timeframes.
@@ -497,13 +595,173 @@ class TradingBot:
         
         if close_signal:
             self._close_position(position, "Exit signal: " + close_signal)
-        else:
-            # Check if we should move stop loss to break even
-            self._check_move_to_break_even(position, current_price)
+            return # Position is closed, no further management needed in this iteration
+
+        # Apply Time-Based Exit Check (if enabled)
+        # This should be one of the first checks after confirming no immediate strategy exit signal
+        if self._apply_time_based_exit(position, current_price, symbol_info): # Pass current_price, symbol_info
+            return # Position was closed by time-based exit
             
-            # Check if we should trail stop loss
-            self._check_trailing_stop(position, current_price, data)
-    
+        # If not closed by time or strategy signal, then manage SL (BE, TSL)
+        self._apply_breakeven_stop(position, current_price, symbol_info)
+        self._apply_trailing_stop_loss(position, current_price, symbol_info)
+
+    def _apply_time_based_exit(self, position: Dict[str, Any], current_market_price: float, symbol_info: Any) -> bool:
+        """
+        Checks and applies time-based exit logic for a position.
+        Returns True if the position was closed, False otherwise.
+        """
+        symbol = position[C.POSITION_SYMBOL]
+        try:
+            symbol_config_data = self.config_manager.get_symbol_config(symbol)
+            strategy_params = symbol_config_data.get(C.CONFIG_STRATEGY_PARAMS, {})
+        except Exception as e:
+            logger.warning(f"Could not fetch strategy_params for {symbol} for Time-Based Exit: {e}. Using defaults.")
+            strategy_params = {}
+
+        enable_time_exit = strategy_params.get(C.CONFIG_ENABLE_TIME_BASED_EXIT, C.DEFAULT_ENABLE_TIME_BASED_EXIT)
+        if not enable_time_exit:
+            return False
+
+        max_duration_hours_config = strategy_params.get(C.CONFIG_MAX_TRADE_DURATION_HOURS, C.DEFAULT_MAX_TRADE_DURATION_HOURS)
+
+        position_open_timestamp = position[C.POSITION_TIME]
+        # Ensure current_time is timezone-aware if position_open_timestamp is (usually UTC from MT5)
+        # datetime.fromtimestamp can create naive datetime if not careful.
+        # MT5 time is usually UTC.
+        position_open_datetime = datetime.fromtimestamp(position_open_timestamp, tz=timezone.utc)
+
+        # Ensure current_datetime is also timezone-aware (UTC) for correct comparison
+        current_datetime = datetime.now(timezone.utc)
+
+        duration_seconds = (current_datetime - position_open_datetime).total_seconds()
+        duration_hours = duration_seconds / 3600
+
+        if duration_hours >= max_duration_hours_config:
+            reason = f"Time-based exit after {duration_hours:.2f} hours (max: {max_duration_hours_config}h)"
+            logger.info(f"Closing position {position[C.POSITION_TICKET]} for {symbol} due to: {reason}")
+            self._close_position(position, reason)
+            return True
+        return False
+
+    def _apply_breakeven_stop(self, position: Dict[str, Any], current_market_price: float, symbol_info: Any) -> None:
+        """Applies break-even stop loss logic if enabled and conditions are met."""
+        symbol = position[C.POSITION_SYMBOL]
+        try:
+            symbol_config_data = self.config_manager.get_symbol_config(symbol)
+            strategy_params = symbol_config_data.get(C.CONFIG_STRATEGY_PARAMS, {})
+        except Exception as e:
+            logger.warning(f"Could not fetch strategy_params for {symbol} for BreakEven: {e}. Using defaults.")
+            strategy_params = {}
+
+        enable_be_stop = strategy_params.get(C.CONFIG_ENABLE_BREAKEVEN_STOP, C.DEFAULT_ENABLE_BREAKEVEN_STOP)
+        if not enable_be_stop:
+            return
+
+        breakeven_pips_profit = strategy_params.get(C.CONFIG_BREAKEVEN_PIPS_PROFIT, C.DEFAULT_BREAKEVEN_PIPS_PROFIT)
+        breakeven_extra_pips = strategy_params.get(C.CONFIG_BREAKEVEN_EXTRA_PIPS, C.DEFAULT_BREAKEVEN_EXTRA_PIPS)
+
+        point_value = symbol_info.point
+        if point_value == 0: # Avoid division by zero
+            logger.warning(f"Point value for {symbol} is 0. Cannot calculate pips for break-even stop.")
+            return
+
+        position_type = position[C.POSITION_TYPE]
+        entry_price = position[C.POSITION_OPEN_PRICE]
+        current_sl = position[C.POSITION_SL]
+        position_ticket = position[C.POSITION_TICKET]
+
+        current_profit_pips = 0
+        if position_type == mt5.POSITION_TYPE_BUY:
+            current_profit_pips = (current_market_price - entry_price) / point_value
+        elif position_type == mt5.POSITION_TYPE_SELL: # Explicitly check for SELL type
+            current_profit_pips = (entry_price - current_market_price) / point_value
+        else: # Unknown position type
+            logger.warning(f"Unknown position type {position_type} for ticket {position_ticket}. Cannot apply break-even.")
+            return
+
+
+        if current_profit_pips >= breakeven_pips_profit:
+            breakeven_sl_price = 0.0
+            if position_type == mt5.POSITION_TYPE_BUY:
+                breakeven_sl_price = entry_price + (breakeven_extra_pips * point_value)
+                # Condition: New SL must be an improvement (higher) than current SL
+                if breakeven_sl_price > current_sl:
+                    logger.info(f"Applying Break-Even SL for BUY {symbol} (Ticket: {position_ticket}): "
+                                f"Profit {current_profit_pips:.2f} pips. Entry: {entry_price:.5f}, "
+                                f"Current SL: {current_sl:.5f}, New BE SL: {breakeven_sl_price:.5f}")
+                    self.mt5.modify_position(ticket=position_ticket, sl=breakeven_sl_price)
+                else:
+                    logger.debug(f"BE BUY {symbol}: Conditions not met for SL update. Profit: {current_profit_pips:.2f}, "
+                                 f"Pot. BE SL: {breakeven_sl_price:.5f}, Curr SL: {current_sl:.5f}")
+
+            elif position_type == mt5.POSITION_TYPE_SELL:
+                breakeven_sl_price = entry_price - (breakeven_extra_pips * point_value)
+                # Condition: New SL must be an improvement (lower) than current SL, or current SL is not set (0.0)
+                if breakeven_sl_price < current_sl or current_sl == 0.0:
+                    logger.info(f"Applying Break-Even SL for SELL {symbol} (Ticket: {position_ticket}): "
+                                f"Profit {current_profit_pips:.2f} pips. Entry: {entry_price:.5f}, "
+                                f"Current SL: {current_sl:.5f}, New BE SL: {breakeven_sl_price:.5f}")
+                    self.mt5.modify_position(ticket=position_ticket, sl=breakeven_sl_price)
+                else:
+                    logger.debug(f"BE SELL {symbol}: Conditions not met for SL update. Profit: {current_profit_pips:.2f}, "
+                                 f"Pot. BE SL: {breakeven_sl_price:.5f}, Curr SL: {current_sl:.5f}")
+
+    def _apply_trailing_stop_loss(self, position: Dict[str, Any], current_market_price: float, symbol_info: Any) -> None:
+        """Applies trailing stop loss logic if enabled and conditions are met."""
+        symbol = position[C.POSITION_SYMBOL]
+        try:
+            # Fetch symbol-specific strategy parameters
+            # Assuming get_symbol_config returns a dict where strategy_params is a key
+            symbol_config_data = self.config_manager.get_symbol_config(symbol)
+            strategy_params = symbol_config_data.get(C.CONFIG_STRATEGY_PARAMS, {})
+        except Exception as e: # Handle cases where symbol might not have specific strategy_params
+            logger.warning(f"Could not fetch strategy_params for {symbol} for TSL: {e}. Using defaults.")
+            strategy_params = {}
+
+        enable_tsl = strategy_params.get(C.CONFIG_ENABLE_TRAILING_STOP, C.DEFAULT_ENABLE_TRAILING_STOP)
+        if not enable_tsl:
+            return
+
+        trailing_start_pips = strategy_params.get(C.CONFIG_TRAILING_START_PIPS_PROFIT, C.DEFAULT_TRAILING_START_PIPS_PROFIT)
+        trailing_step_pips = strategy_params.get(C.CONFIG_TRAILING_STEP_PIPS, C.DEFAULT_TRAILING_STEP_PIPS)
+        # Activation distance: price must be this far from entry for TSL to first activate SL adjustment
+        activation_dist_pips = strategy_params.get(C.CONFIG_TRAILING_ACTIVATION_PRICE_DISTANCE_PIPS, C.DEFAULT_TRAILING_ACTIVATION_PRICE_DISTANCE_PIPS)
+
+        point_value = symbol_info.point
+        position_type = position[C.POSITION_TYPE] # MT5.POSITION_TYPE_BUY or MT5.POSITION_TYPE_SELL
+        entry_price = position[C.POSITION_OPEN_PRICE]
+        current_sl = position[C.POSITION_SL]
+        position_ticket = position[C.POSITION_TICKET]
+
+        current_profit_pips = 0
+        if position_type == mt5.POSITION_TYPE_BUY:
+            current_profit_pips = (current_market_price - entry_price) / point_value
+        else: # SELL
+            current_profit_pips = (entry_price - current_market_price) / point_value
+
+        if current_profit_pips >= trailing_start_pips:
+            potential_new_sl = 0.0
+            activation_buffer_price = activation_dist_pips * point_value
+
+            if position_type == mt5.POSITION_TYPE_BUY:
+                potential_new_sl = current_market_price - (trailing_step_pips * point_value)
+                # Ensure SL is above entry + activation_buffer OR improves current SL
+                if potential_new_sl > (entry_price + activation_buffer_price) and potential_new_sl > current_sl :
+                    logger.info(f"Trailing SL for BUY {symbol} (Ticket: {position_ticket}): Profit {current_profit_pips:.2f} pips. Current Price: {current_market_price:.5f}, Current SL: {current_sl:.5f}, Potential New SL: {potential_new_sl:.5f}")
+                    self.mt5.modify_position(ticket=position_ticket, sl=potential_new_sl)
+                else:
+                    logger.debug(f"TSL BUY {symbol}: Conditions not met for SL update. Profit: {current_profit_pips:.2f}, Pot. SL: {potential_new_sl:.5f}, Entry+Activation: {(entry_price + activation_buffer_price):.5f}, Curr SL: {current_sl:.5f}")
+
+            elif position_type == mt5.POSITION_TYPE_SELL:
+                potential_new_sl = current_market_price + (trailing_step_pips * point_value)
+                # Ensure SL is below entry - activation_buffer OR improves current SL (current_sl will be higher for SELL)
+                if potential_new_sl < (entry_price - activation_buffer_price) and (potential_new_sl < current_sl or current_sl == 0.0):
+                    logger.info(f"Trailing SL for SELL {symbol} (Ticket: {position_ticket}): Profit {current_profit_pips:.2f} pips. Current Price: {current_market_price:.5f}, Current SL: {current_sl:.5f}, Potential New SL: {potential_new_sl:.5f}")
+                    self.mt5.modify_position(ticket=position_ticket, sl=potential_new_sl)
+                else:
+                    logger.debug(f"TSL SELL {symbol}: Conditions not met for SL update. Profit: {current_profit_pips:.2f}, Pot. SL: {potential_new_sl:.5f}, Entry-Activation: {(entry_price - activation_buffer_price):.5f}, Curr SL: {current_sl:.5f}")
+
     def _check_exit_signals(
         self, 
         position: Dict[str, Any], # Esperar un diccionario
@@ -570,15 +828,25 @@ class TradingBot:
         Args:
             position: Position to close (dictionary from MT5 position._asdict())
             reason: Reason for closing
+            bypass_dd_check: If true, allows closing even if DD limit was hit (used by DD limit itself)
         """
         position_ticket = position[C.POSITION_TICKET]
-        logger.info(f"Closing position {position_ticket}: {reason}")
+        logger.info(f"Attempting to close position {position_ticket}: {reason}")
         
-        result = self.mt5.close_position(position_ticket)
+        # Allow this specific close operation to bypass kill switch if it's a DD closure.
+        # The bypass_kill_switch is passed to mt5.close_position.
+        # If reason is "Daily drawdown limit closure", bypass_kill_switch should be true.
+        is_dd_closure = "Daily drawdown limit closure" in reason
         
-        if result.get('retcode') != C.RETCODE_DONE:
+        result = self.mt5.close_position(position_ticket, bypass_kill_switch=is_dd_closure)
+
+        if result.get('retcode') == C.RETCODE_DONE:
+            closed_profit = result.get('profit', 0.0)
+            self.daily_pnl_realized += closed_profit # Update realized P&L
+            logger.info(f"Successfully closed position {position_ticket}. Profit: {closed_profit:.2f}. Updated Daily Realized P&L: {self.daily_pnl_realized:.2f}")
+        else:
             logger.error(f"Failed to close position {position_ticket}: {result.get(C.REQUEST_COMMENT)}")
-    
+
     def _check_move_to_break_even(self, position: Dict[str, Any], current_price: float) -> None:
         """
         Check if we should move stop loss to break even.
@@ -597,21 +865,32 @@ class TradingBot:
         open_price = position[C.POSITION_OPEN_PRICE]
         current_sl = position[C.POSITION_SL]
 
-        # TODO: Make '50' points and spread factor configurable through constants or config
-        points_threshold = 50
+        # This method is now replaced by _apply_breakeven_stop
+        # symbol = position[C.POSITION_SYMBOL]
+        # symbol_info = mt5.symbol_info(symbol)
+        # if not symbol_info:
+        #     logger.error(f"Could not get symbol info for {symbol} in break even check")
+        #     return
 
-        if position_type == mt5.POSITION_TYPE_BUY:
-            price_move = (current_price - open_price) / symbol_info.point
-            if price_move >= points_threshold:
-                new_sl = open_price + (symbol_info.spread * symbol_info.point)
-                if new_sl > current_sl:
-                    self._modify_position(position, sl=new_sl)
-        else: # SELL
-            price_move = (open_price - current_price) / symbol_info.point
-            if price_move >= points_threshold:
-                new_sl = open_price - (symbol_info.spread * symbol_info.point)
-                if new_sl < current_sl or current_sl == 0:
-                    self._modify_position(position, sl=new_sl)
+        # position_type = position[C.POSITION_TYPE]
+        # open_price = position[C.POSITION_OPEN_PRICE]
+        # current_sl = position[C.POSITION_SL]
+
+        # points_threshold = 50 # Example fixed value, should be from config
+        # spread_factor_for_be = symbol_info.spread * symbol_info.point # Example
+
+        # if position_type == mt5.POSITION_TYPE_BUY:
+        #     price_move = (current_price - open_price) / symbol_info.point
+        #     if price_move >= points_threshold:
+        #         new_sl = open_price + spread_factor_for_be
+        #         if new_sl > current_sl:
+        #             self._modify_position(position, sl=new_sl)
+        # else: # SELL
+        #     price_move = (open_price - current_price) / symbol_info.point
+        #     if price_move >= points_threshold:
+        #         new_sl = open_price - spread_factor_for_be
+        #         if new_sl < current_sl or current_sl == 0:
+        #             self._modify_position(position, sl=new_sl)
     
     def _check_trailing_stop(
         self, 
@@ -637,14 +916,15 @@ class TradingBot:
         position_type = position[C.POSITION_TYPE] # MT5 constant
         current_sl = position[C.POSITION_SL]
 
-        if position_type == mt5.POSITION_TYPE_BUY:
-            new_sl = current_price - (atr * atr_multiplier_for_trailing)
-            if new_sl > current_sl:
-                self._modify_position(position, sl=new_sl)
-        else: # SELL
-            new_sl = current_price + (atr * atr_multiplier_for_trailing)
-            if new_sl < current_sl or current_sl == 0:
-                self._modify_position(position, sl=new_sl)
+        # This old logic is now replaced by _apply_trailing_stop_loss
+        # if position_type == mt5.POSITION_TYPE_BUY:
+        #     new_sl = current_price - (atr * atr_multiplier_for_trailing)
+        #     if new_sl > current_sl:
+        #         self._modify_position(position, sl=new_sl)
+        # else: # SELL
+        #     new_sl = current_price + (atr * atr_multiplier_for_trailing)
+        #     if new_sl < current_sl or current_sl == 0:
+        #         self._modify_position(position, sl=new_sl)
     
     def _get_atr(self, data: Dict[str, pd.DataFrame], period: int = 14) -> Optional[float]:
         """
@@ -740,20 +1020,24 @@ class TradingBot:
             symbol_config: Symbol configuration
             current_positions: List of current positions
         """
-        # Check if we can trade this symbol
-        # Pasar la lista completa de posiciones al risk_manager
+        # Check News Filter first
+        if self.enable_news_filter: # Check the bot's attribute loaded from config
+            is_blackout, event_name = self._is_within_news_blackout_period()
+            if is_blackout:
+                logger.warning(f"Skipping new entry check for {symbol} due to news event: {event_name}.")
+                return
+
+        # Then check other conditions like RiskManager market conditions
         can_trade, reason = self.risk_manager.check_market_conditions(
             symbol=symbol,
             data=data,
             current_positions=current_positions
         )
-        
         if not can_trade:
-            logger.debug("Skipping %s: %s", symbol, reason)
+            logger.debug(f"Skipping {symbol} due to market conditions or risk limits: {reason}")
             return
         
-        # Analyze the market
-        # Pass None for position_info as we are checking for new entries
+        # Analyze the market only if no news blackout and other conditions met
         analysis = self.strategy.analyze(symbol, data, position_info=None)
         
         signal_type = analysis.get('signal', SignalType.NONE) # 'signal' is fine as string key

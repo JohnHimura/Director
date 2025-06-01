@@ -254,7 +254,8 @@ class MACDStrategy(Strategy):
             current_price=current_price,
             trend_direction=trend_direction,
             sr_levels=sr_levels,
-            position_info=position_info
+            position_info=position_info,
+            symbol=symbol  # Pass the symbol argument
         )
         
         # Check for exit signals if in a position
@@ -304,7 +305,8 @@ class MACDStrategy(Strategy):
         current_price: float,
         trend_direction: int,
         sr_levels: List[SRLevel],
-        position_info: Optional[Dict[str, Any]] = None
+        position_info: Optional[Dict[str, Any]] = None,
+        symbol: str  # Added symbol parameter
     ) -> Tuple[int, float, str]:
         """
         Check for entry signals based on MACD strategy rules.
@@ -382,34 +384,125 @@ class MACDStrategy(Strategy):
         sell_strength = sum(1 for cond in sell_conditions if cond) / len(sell_conditions)
         
         # Only take signals with sufficient strength
+        # self.config here is ConfigManager instance
+        # Get symbol specific strategy parameters
+        # Assuming symbol is available in this scope, if not, it needs to be passed to _check_entry_signal
+        # For now, let's assume self.config directly gives access to this symbol's full config.
+        # This part needs the 'symbol' argument to fetch symbol-specific strategy_params
+        # _check_entry_signal needs access to the symbol name.
+        # Let's assume 'symbol' is an implicit part of 'self' for this strategy instance, or passed.
+        # The analyze method has 'symbol', so _check_entry_signal should receive it.
+        # For now, I'll fetch strategy_params from global_settings as a fallback,
+        # but ideally, it should come from symbol-specific config.
+        # This will be corrected when _check_entry_signal signature is updated if symbol not available.
+
+        # Fetching strategy parameters for the symbol
+        # This requires `symbol` to be passed to `_check_entry_signal`
+        # For now, let's pass `df.name` if it's set to symbol, or assume a generic way.
+        # This part of the code is inside MACDStrategy, which is initialized with ConfigManager.
+        # The `analyze` method has `symbol`. This symbol should be passed to `_check_entry_signal`.
+        # Temporarily modify to fetch from global if symbol is not directly available here.
+        # This will be fixed by passing `symbol` to `_check_entry_signal`.
+
+        # Placeholder: symbol = self.symbol if hasattr(self, 'symbol') else "default"
+        # This should be fixed by ensuring 'symbol' is passed to _check_entry_signal
+        # For now, we'll assume this method will be called from `analyze` which has `symbol`.
+        # The call in `analyze` is:
+        # signal, signal_strength, message = self._check_entry_signal(
+        # df=df, current_price=current_price, trend_direction=trend_direction,
+        # sr_levels=sr_levels, position_info=position_info, symbol=symbol <--- Add symbol here
+        # )
+        # And update method signature: def _check_entry_signal(self, ..., symbol: str)
+
+        # Assuming 'symbol' is passed as an argument to this method in the final implementation
+        # For now, let's use a placeholder or skip fetching symbol-specific strategy_params directly here.
+        # The logic below will be wrapped after fetching strategy_params.
+
+        # The current `analyze` method doesn't pass `symbol` to `_check_entry_signal`
+        # This will be the first change.
+
+        # --- This logic needs to be inside the `if buy_strength` and `if sell_strength` blocks ---
+        # --- after fetching strategy_params for the specific symbol ---
+
+        # For now, will proceed with the existing SL/TP logic and then refactor it
+        # once the symbol argument is correctly plumbed.
+
+        # Existing SL/TP logic (example, will be replaced/augmented)
+        default_sl_atr_multiplier = 2.0 # Example, this comes from old logic
+        default_tp_rr_ratio = 3.0     # Example
+
+        # The new logic will be conditional based on use_atr_sl_tp
+        # This requires fetching strategy_params using the `symbol`
+        # For now, let's assume strategy_params are fetched and available.
+        # This is a placeholder for where strategy_params would be fetched:
+        # strategy_params = self.config.get_symbol_config(symbol).get(C.CONFIG_STRATEGY_PARAMS, {})
+        # use_atr = strategy_params.get(C.CONFIG_USE_ATR_SL_TP, C.DEFAULT_USE_ATR_SL_TP)
+        # sl_mult = strategy_params.get(C.CONFIG_ATR_SL_MULTIPLIER, C.DEFAULT_ATR_SL_MULTIPLIER)
+        # tp_mult = strategy_params.get(C.CONFIG_ATR_TP_MULTIPLIER, C.DEFAULT_ATR_TP_MULTIPLIER)
+
+        # This part will be heavily refactored. The current SL/TP is inside the if blocks.
+
         strategy_settings = self.config.get_global_settings().get(C.CONFIG_STRATEGY, {})
         min_strength = strategy_settings.get(C.CONFIG_STRATEGY_MIN_SIGNAL_STRENGTH, 0.7)
-        
+
+        # Placeholder for symbol - this needs to be passed to _check_entry_signal
+        # This is a conceptual problem in the current refactoring step, will fix by modifying analyze's call
+        # temp_symbol_for_params = "EURUSD" # TODO: Replace with actual symbol passed to method
+        # Use the passed symbol argument
+        symbol_config = self.config.get_symbol_config(symbol)
+        strategy_params = symbol_config.get(C.CONFIG_STRATEGY_PARAMS, {})
+
+        use_atr_sl_tp_config = strategy_params.get(C.CONFIG_USE_ATR_SL_TP, C.DEFAULT_USE_ATR_SL_TP)
+        atr_sl_multiplier_config = strategy_params.get(C.CONFIG_ATR_SL_MULTIPLIER, C.DEFAULT_ATR_SL_MULTIPLIER)
+        atr_tp_multiplier_config = strategy_params.get(C.CONFIG_ATR_TP_MULTIPLIER, C.DEFAULT_ATR_TP_MULTIPLIER)
+
+        # Fallback to old sl/tp multipliers from risk section if ATR SL/TP is not used,
+        # or define fixed pips as another fallback.
+        # The current MACD strategy uses S/R and ATR for SL, and R:R for TP.
+        # We will replace this with the new ATR logic if use_atr_sl_tp is true.
+
+        final_stop_loss = 0.0
+        final_take_profit = 0.0
+
         if buy_strength >= min_strength and buy_strength > sell_strength:
-            # Calculate risk/reward
-            if nearest_support and atr > 0:
-                stop_loss = min(nearest_support.price, current_price - 2 * atr)
-                take_profit = current_price + 3 * (current_price - stop_loss)
-                
-                # Update instance variables
-                self.entry_price = current_price
-                self.stop_loss = stop_loss
-                self.take_profit = take_profit
-                
-                return SignalType.BUY, buy_strength, "Buy signal: MACD cross up, near support"
+            self.entry_price = current_price # Set entry price for the potential trade
+            if use_atr_sl_tp_config and atr > 0:
+                stop_loss_distance = atr * atr_sl_multiplier_config
+                take_profit_distance = atr * atr_tp_multiplier_config
+                final_stop_loss = current_price - stop_loss_distance
+                final_take_profit = current_price + take_profit_distance
+                logger.debug(f"ATR SL/TP for BUY: SL_dist={stop_loss_distance:.5f}, TP_dist={take_profit_distance:.5f}, ATR={atr:.5f}")
+            else: # Fallback to existing logic (S/R based SL, R:R TP)
+                if nearest_support and atr > 0:
+                    final_stop_loss = min(nearest_support.price, current_price - (atr * C.DEFAULT_ATR_SL_MULTIPLIER)) # Default ATR mult for SL
+                    final_take_profit = current_price + ( (current_price - final_stop_loss) * C.DEFAULT_ATR_TP_MULTIPLIER )
+                else:
+                    logger.warning(f"Cannot calculate S/R-ATR based SL/TP for BUY {symbol}. ATR={atr}, Support={nearest_support}")
+                    return SignalType.NONE, 0.0, "No clear signal due to SL/TP calculation issue (BUY Fallback)"
+
+            self.stop_loss = final_stop_loss
+            self.take_profit = final_take_profit
+            return SignalType.BUY, buy_strength, "Buy signal: MACD cross up, near support"
             
         elif sell_strength >= min_strength:
-            # Calculate risk/reward
-            if nearest_resistance and atr > 0:
-                stop_loss = max(nearest_resistance.price, current_price + 2 * atr)
-                take_profit = current_price - 3 * (stop_loss - current_price)
-                
-                # Update instance variables
-                self.entry_price = current_price
-                self.stop_loss = stop_loss
-                self.take_profit = take_profit
-                
-                return SignalType.SELL, sell_strength, "Sell signal: MACD cross down, near resistance"
+            self.entry_price = current_price # Set entry price
+            if use_atr_sl_tp_config and atr > 0:
+                stop_loss_distance = atr * atr_sl_multiplier_config
+                take_profit_distance = atr * atr_tp_multiplier_config
+                final_stop_loss = current_price + stop_loss_distance
+                final_take_profit = current_price - take_profit_distance
+                logger.debug(f"ATR SL/TP for SELL: SL_dist={stop_loss_distance:.5f}, TP_dist={take_profit_distance:.5f}, ATR={atr:.5f}")
+            else: # Fallback
+                if nearest_resistance and atr > 0:
+                    final_stop_loss = max(nearest_resistance.price, current_price + (atr * C.DEFAULT_ATR_SL_MULTIPLIER))
+                    final_take_profit = current_price - ( (final_stop_loss - current_price) * C.DEFAULT_ATR_TP_MULTIPLIER )
+                else:
+                    logger.warning(f"Cannot calculate S/R-ATR based SL/TP for SELL {symbol}. ATR={atr}, Resistance={nearest_resistance}")
+                    return SignalType.NONE, 0.0, "No clear signal due to SL/TP calculation issue (SELL Fallback)"
+
+            self.stop_loss = final_stop_loss
+            self.take_profit = final_take_profit
+            return SignalType.SELL, sell_strength, "Sell signal: MACD cross down, near resistance"
         
         return SignalType.NONE, 0.0, "No clear signal"
     
