@@ -246,6 +246,10 @@ STATE_PEAK_EQUITY = "peak_account_equity"
 STATE_INITIAL_DAILY_BALANCE = "initial_daily_balance"
 STATE_DAILY_PNL_REALIZED = "daily_pnl_realized"
 STATE_LAST_RESET_DATE = "last_reset_date"
+# ACCOUNT_KILL_SWITCH_HIT_KEY = "account_kill_switch_hit" # Already string literal in main_bot.py
+
+# Logging
+LOGS_DIR = "logs" # Default directory for logs
 
 # Default strategy name
 DEFAULT_STRATEGY_NAME = "MACDStrategy" # Example default

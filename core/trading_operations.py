@@ -3,7 +3,7 @@ Module for trading operations with MetaTrader 5.
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Callable # Added Callable
 
 # Import from utility modules
 from .utils.error_handler import retry, safe_operation, ConnectionError, TimeoutError, OperationError, ValidationError

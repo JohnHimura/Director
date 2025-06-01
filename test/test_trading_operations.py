@@ -231,5 +231,3 @@ def test_close_position_real_trading_profit_calculation(trading_ops_paper_off: M
     assert result['profit'] == expected_profit + mock_deal.commission + mock_deal.swap
     mock_mt5_instance.order_send.assert_called_once()
     mock_mt5_instance.history_deals_get.assert_called_once_with(order=closing_order_ticket)
-
-```

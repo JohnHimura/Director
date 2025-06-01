@@ -156,7 +156,7 @@ class RiskManager:
             'risk_percent': actual_risk_percent,
             'risk_per_share': risk_per_share,
             C.POSITION_SL: stop_loss, # Use constant for key
-            C.POSITION_TP': self._calculate_take_profit(entry_price, stop_loss, # Use constant for key
+            C.POSITION_TP: self._calculate_take_profit(entry_price, stop_loss, # Corrected: Removed extraneous quote
                                                        C.ORDER_TYPE_BUY if entry_price > stop_loss else C.ORDER_TYPE_SELL,
                                                        risk_reward_ratio=tp_atr_multiplier)
         }
