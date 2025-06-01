@@ -23,7 +23,25 @@
         "paper_trading": {"type": "boolean"},
         "max_slippage_points": {"type": "integer"},
         "kill_switch_file_path": {"type": "string", "default": "KILL_SWITCH.txt"},
-        "kill_switch_close_positions": {"type": "boolean", "default": true}
+        "kill_switch_close_positions": {"type": "boolean", "default": true},
+        "enable_daily_drawdown_limit": {"type": "boolean", "default": false},
+        "max_daily_drawdown_percentage": {"type": "number", "default": 2.0, "minimum": 0.1, "maximum": 100.0},
+        "close_positions_on_daily_drawdown_limit": {"type": "boolean", "default": true},
+        "enable_news_filter": {"type": "boolean", "default": false},
+        "high_impact_news_windows": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "items": [
+              {"type": "string", "format": "date-time"},
+              {"type": "string", "format": "date-time"},
+              {"type": "string"}
+            ],
+            "minItems": 3,
+            "maxItems": 3
+          }
+        }
       },
       "required": [
         "max_total_trades",
@@ -33,7 +51,12 @@
         "paper_trading",
         "max_slippage_points",
         "kill_switch_file_path",
-        "kill_switch_close_positions"
+        "kill_switch_close_positions",
+        "enable_daily_drawdown_limit",
+        "max_daily_drawdown_percentage",
+        "close_positions_on_daily_drawdown_limit",
+        "enable_news_filter",
+        "high_impact_news_windows"
       ]
     },
     "logging": {
@@ -83,22 +106,57 @@
             "max_open_trades": {"type": "integer"},
             "max_position_size": {"type": "number"},
             "max_daily_trades": {"type": "integer"},
-            "sl_atr_multiplier": {"type": "number"},
-            "tp_atr_multiplier": {"type": "number"},
+            "sl_atr_multiplier": {"type": "number"}, # Old, might be replaced by atr_sl_multiplier if use_atr_sl_tp is true
+            "tp_atr_multiplier": {"type": "number"}, # Old, might be replaced by atr_tp_multiplier if use_atr_sl_tp is true
             "trailing_sl_enabled": {"type": "boolean"},
             "trailing_sl_atr_multiplier": {"type": "number"},
             "break_even_atr_multiplier": {"type": "number"},
-            "break_even_enabled": {"type": "boolean"}
+            "break_even_enabled": {"type": "boolean"},
+            "use_atr_sl_tp": {"type": "boolean", "default": false},
+            "atr_sl_multiplier": {"type": "number", "default": 1.5},
+            "atr_tp_multiplier": {"type": "number", "default": 3.0}
           },
           "required": [
             "risk_per_trade", "max_risk_per_trade", "max_daily_drawdown", "max_open_trades",
-            "max_position_size", "max_daily_trades", "sl_atr_multiplier", "tp_atr_multiplier",
+            "max_position_size", "max_daily_trades",
+            "sl_atr_multiplier", "tp_atr_multiplier", # Keep for now, strategy might use if use_atr_sl_tp is false
             "trailing_sl_enabled", "trailing_sl_atr_multiplier", "break_even_atr_multiplier",
-            "break_even_enabled"
+            "break_even_enabled",
+            "use_atr_sl_tp", "atr_sl_multiplier", "atr_tp_multiplier"
           ]
         }
       },
-      "required": ["indicators", "sr", "risk"]
+      "required": ["indicators", "sr", "risk", "strategy_params"] # Add strategy_params to required defaults
+    },
+    "definitions": { # Reusable definition for strategy_params
+      "strategy_params_properties": {
+        "type": "object",
+        "properties": {
+          "use_atr_sl_tp": {"type": "boolean", "default": false},
+          "atr_sl_tp_atr_period": {"type": "integer", "default": 14},
+          "atr_sl_multiplier": {"type": "number", "default": 1.5},
+          "atr_tp_multiplier": {"type": "number", "default": 3.0},
+          "default_stop_loss_pips": {"type": "integer", "default": 50},
+          "default_take_profit_pips": {"type": "integer", "default": 100},
+          "enable_trailing_stop": {"type": "boolean", "default": false},
+          "trailing_start_pips_profit": {"type": "integer", "default": 50},
+          "trailing_step_pips": {"type": "integer", "default": 10},
+          "trailing_activation_price_distance_pips": {"type": "integer", "default": 20},
+          "enable_breakeven_stop": {"type": "boolean", "default": false},
+          "breakeven_pips_profit": {"type": "integer", "default": 30},
+          "breakeven_extra_pips": {"type": "integer", "default": 2},
+          "enable_time_based_exit": {"type": "boolean", "default": false},
+          "max_trade_duration_hours": {"type": "integer", "default": 24, "minimum": 1}
+        },
+        "required": [
+            "use_atr_sl_tp", "atr_sl_tp_atr_period", "atr_sl_multiplier", "atr_tp_multiplier",
+            "default_stop_loss_pips", "default_take_profit_pips",
+            "enable_trailing_stop", "trailing_start_pips_profit", "trailing_step_pips",
+            "trailing_activation_price_distance_pips",
+            "enable_breakeven_stop", "breakeven_pips_profit", "breakeven_extra_pips",
+            "enable_time_based_exit", "max_trade_duration_hours"
+        ]
+      }
     },
     "symbols": {
       "type": "object",
@@ -125,16 +183,23 @@
                 "method": {"type": "string"}
               }
             },
-            "risk": {
+            "risk": { # Symbol-specific risk can override defaults
               "type": "object",
-              "properties": {
+              "properties": { # Only list overrides, defaults are merged by ConfigManager
                 "risk_per_trade": {"type": "number"},
                 "sl_atr_multiplier": {"type": "number"},
-                "tp_atr_multiplier": {"type": "number"}
+                "tp_atr_multiplier": {"type": "number"},
+                "use_atr_sl_tp": {"type": "boolean"},
+                "atr_sl_multiplier": {"type": "number"},
+                "atr_tp_multiplier": {"type": "number"}
+                # Other specific risk params can be listed here if they can be overridden per symbol
               }
+            },
+            "strategy_params": { # Symbol-specific strategy_params can override defaults
+              "$ref": "#/definitions/strategy_params_properties" # Reference the common definition
             }
           },
-          "required": ["enabled", "lot_size", "spread_limit_pips"]
+          "required": ["enabled", "lot_size", "spread_limit_pips"] # risk and strategy_params are optional here
         }
       }
     }

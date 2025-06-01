@@ -271,15 +271,46 @@ class MT5TradingOperations:
             if result.retcode != C.RETCODE_DONE:
                 raise OperationError(f"Close position {ticket} failed: Code={result.retcode}, Comment='{result.comment}'")
                 
+            closed_position_profit = 0.0
+            try:
+                # Attempt to fetch deal details for the closing order to get profit
+                # This might need a small delay or retry if deal is not immediately available.
+                # For simplicity, trying once.
+                time.sleep(0.5) # Small delay to allow deal processing by server
+                deals = mt5.history_deals_get(order=result.order)
+                if deals:
+                    for deal in deals:
+                        closed_position_profit += deal.profit + deal.commission + deal.swap
+                else: # Fallback: try to get deals by position ID if order linking fails
+                    deals_by_pos = mt5.history_deals_get(position=ticket)
+                    if deals_by_pos:
+                        # Filter deals that are "out" or "in/out" and match the volume, symbol, etc.
+                        # This can be complex; a simpler sum of profits for the position ID might be an approximation.
+                        for deal in deals_by_pos:
+                            # This logic is simplified: it assumes all deals for this position ID contribute to the P&L
+                            # of the part being closed. A more accurate way is to sum profits of deals
+                            # whose volume matches the closed volume and occur after the position opening.
+                            # For now, sum all profits for deals associated with this position ticket that are "closing" deals.
+                            # A common way is to identify deals that reduce or close the position.
+                            # For this iteration, we'll sum all deals for simplicity and note it's an approximation.
+                            # Or, better, filter for deals matching the closing order ticket.
+                            if deal.order == result.order: # Only deals from this closing order
+                                closed_position_profit += deal.profit + deal.commission + deal.swap
+                    else:
+                        logger.warning(f"Could not fetch deals for closing order {result.order} or position {ticket} to determine profit.")
+            except Exception as deal_ex:
+                logger.warning(f"Could not determine profit for closed position {ticket} due to: {deal_ex}")
+
             close_result = {
                 C.POSITION_TICKET: result.order,
                 'original_ticket': ticket,
                 'retcode': result.retcode,
                 C.REQUEST_COMMENT: result.comment,
-                'request': mt5_request
+                'request': mt5_request,
+                'profit': closed_position_profit # Add profit to the result
             }
             
-            logger.info(f"Position {ticket} closed successfully by order {result.order}.")
+            logger.info(f"Position {ticket} closed successfully by order {result.order}. Realized P&L for this closure: {closed_position_profit:.2f}")
             return close_result
         except Exception as e:
             logger.error(f"Error closing position {ticket}: {str(e)}")

@@ -134,19 +134,34 @@ def mock_config_manager_for_engine():
     # Mock get_symbol_config to return a merged view if needed by a strategy
     # For now, assuming strategies mostly use get_indicator_params, get_sr_params, etc.
     # If a strategy calls get_symbol_config directly, this might need more detail.
-    # Example:
-    # def mock_get_symbol_config(symbol):
-    #     base_config = {
-    #         C.CONFIG_INDICATORS: mock_cm.get_indicator_params(symbol), # Uses the above
-    #         C.CONFIG_SR: {}, # Mock SR params
-    #         C.CONFIG_RISK: {}  # Mock Risk params
-    #     }
-    #     # Add symbol specific overrides if necessary for a test
-    #     return base_config
-    # mock_cm.get_symbol_config.side_effect = mock_get_symbol_config
+    def mock_get_symbol_config(symbol):
+        # Default strategy_params, can be overridden in specific tests if needed
+        strategy_params = {
+            C.CONFIG_USE_ATR_SL_TP: C.DEFAULT_USE_ATR_SL_TP, # False by default
+            C.CONFIG_ATR_SL_TP_ATR_PERIOD: C.DEFAULT_ATR_SL_TP_ATR_PERIOD, # e.g. 14
+            C.CONFIG_ATR_SL_MULTIPLIER: C.DEFAULT_ATR_SL_MULTIPLIER, # e.g. 1.5
+            C.CONFIG_ATR_TP_MULTIPLIER: C.DEFAULT_ATR_TP_MULTIPLIER, # e.g. 3.0
+            C.CONFIG_DEFAULT_SL_PIPS: 100, # Example fallback
+            C.CONFIG_DEFAULT_TP_PIPS: 200  # Example fallback
+        }
+        if symbol == "EURUSD_ATR_ON": # Special symbol name for testing ATR SL/TP ON
+            strategy_params[C.CONFIG_USE_ATR_SL_TP] = True
+            strategy_params[C.CONFIG_ATR_SL_MULTIPLIER] = 2.0
+            strategy_params[C.CONFIG_ATR_TP_MULTIPLIER] = 4.0
 
-    mock_cm.get_sr_params.return_value = {} # Default SR params
-    mock_cm.get_risk_params.return_value = {} # Default Risk params
+        base_config = {
+            C.CONFIG_INDICATORS: mock_cm.get_indicator_params(symbol), # Uses the above general mock
+            C.CONFIG_SR: mock_cm.get_sr_params(symbol),             # Uses the general mock
+            C.CONFIG_RISK: mock_cm.get_risk_params(symbol),           # Uses the general mock
+            C.CONFIG_STRATEGY_PARAMS: strategy_params,
+            C.CONFIG_ENABLED: True # Assume enabled for tests using this
+            # Add other symbol-level configs if needed, like lot_size, spread_limit_pips
+        }
+        return base_config
+    mock_cm.get_symbol_config.side_effect = mock_get_symbol_config
+
+    mock_cm.get_sr_params.return_value = {"method":"pivots"} # Default SR params
+    mock_cm.get_risk_params.return_value = {C.CONFIG_RISK_PER_TRADE: 0.01} # Default Risk params
 
     return mock_cm
 

@@ -6,16 +6,24 @@ CONFIG_LOGGING = "logging"
 CONFIG_METATRADER5 = "metatrader5"
 CONFIG_DEFAULTS = "defaults"
 CONFIG_SYMBOLS = "symbols"
-CONFIG_STRATEGY = "strategy"
+CONFIG_STRATEGY = "strategy" # General strategy settings, often under global_settings
+CONFIG_STRATEGY_PARAMS = "strategy_params" # Symbol-specific strategy parameters
+
 
 # Configuration Keys - Global Settings
 CONFIG_PAPER_TRADING = "paper_trading"
 CONFIG_MAX_SLIPPAGE_POINTS = "max_slippage_points"
 CONFIG_MAGIC_NUMBER = "magic_number"
 CONFIG_LOOP_INTERVAL = "loop_interval"
-CONFIG_DEVIATION = "deviation" # Retained for now, though slippage uses max_slippage_points
+CONFIG_DEVIATION = "deviation"
 CONFIG_MAX_TOTAL_TRADES = "max_total_trades"
 CONFIG_MAX_SLIPPAGE_PIPS = "max_slippage_pips"
+CONFIG_KILL_SWITCH_FILE_PATH = "kill_switch_file_path"
+CONFIG_KILL_SWITCH_CLOSE_POSITIONS = "kill_switch_close_positions"
+# Daily Drawdown Limit Config Keys
+CONFIG_ENABLE_DAILY_DRAWDOWN_LIMIT = "enable_daily_drawdown_limit"
+CONFIG_MAX_DAILY_DRAWDOWN_PERCENTAGE = "max_daily_drawdown_percentage"
+CONFIG_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT = "close_positions_on_daily_drawdown_limit"
 
 
 # Configuration Keys - Logging
@@ -36,11 +44,11 @@ CONFIG_MT5_PORTABLE = "portable"
 # Configuration Keys - Defaults & Symbols subsections
 CONFIG_INDICATORS = "indicators"
 CONFIG_RISK = "risk"
-CONFIG_SR = "sr" # Support/Resistance
+CONFIG_SR = "sr"
 
 # Configuration Keys - Symbol specific
 CONFIG_ENABLED = "enabled"
-CONFIG_LOT_SIZE = "lot_size"
+CONFIG_LOT_SIZE = "lot_size" # Also used as a key in RiskManager output
 CONFIG_SPREAD_LIMIT_PIPS = "spread_limit_pips"
 
 # Configuration Keys - Indicators (common examples)
@@ -55,68 +63,96 @@ CONFIG_INDICATOR_ATR_MULTIPLIER = "atr_multiplier"
 CONFIG_SR_METHOD = "method"
 CONFIG_SR_PIVOT_TYPE = "pivot_type"
 CONFIG_SR_FRACTAL_WINDOW = "fractal_window"
-# ... other SR params if needed
 
 # Configuration Keys - Risk
 CONFIG_RISK_PER_TRADE = "risk_per_trade"
 CONFIG_MAX_RISK_PER_TRADE = "max_risk_per_trade"
-# ... other risk params
+CONFIG_OLD_SL_ATR_MULTIPLIER = "sl_atr_multiplier" # From existing risk config, might be fallback
+CONFIG_OLD_TP_ATR_MULTIPLIER = "tp_atr_multiplier" # From existing risk config, might be fallback
 
-# Order Types (used in trading_operations and potentially strategies if sending string types)
+# Configuration Keys - Strategy Params
+CONFIG_USE_ATR_SL_TP = "use_atr_sl_tp"
+CONFIG_ATR_SL_TP_ATR_PERIOD = "atr_sl_tp_atr_period"
+CONFIG_ATR_SL_MULTIPLIER = "atr_sl_multiplier"
+CONFIG_ATR_TP_MULTIPLIER = "atr_tp_multiplier"
+CONFIG_DEFAULT_SL_PIPS = "default_stop_loss_pips"
+CONFIG_DEFAULT_TP_PIPS = "default_take_profit_pips"
+# Trailing Stop Loss Config Keys
+CONFIG_ENABLE_TRAILING_STOP = "enable_trailing_stop"
+CONFIG_TRAILING_START_PIPS_PROFIT = "trailing_start_pips_profit"
+CONFIG_TRAILING_STEP_PIPS = "trailing_step_pips"
+CONFIG_TRAILING_ACTIVATION_PRICE_DISTANCE_PIPS = "trailing_activation_price_distance_pips"
+# Break-Even Stop Config Keys
+CONFIG_ENABLE_BREAKEVEN_STOP = "enable_breakeven_stop"
+CONFIG_BREAKEVEN_PIPS_PROFIT = "breakeven_pips_profit"
+CONFIG_BREAKEVEN_EXTRA_PIPS = "breakeven_extra_pips"
+# Time-Based Exit Config Keys
+CONFIG_ENABLE_TIME_BASED_EXIT = "enable_time_based_exit"
+CONFIG_MAX_TRADE_DURATION_HOURS = "max_trade_duration_hours"
+
+
+# Order Types
 ORDER_TYPE_BUY = "BUY"
 ORDER_TYPE_SELL = "SELL"
 
-# Indicator Names (used in DataFrames, analysis results etc.)
+# Indicator Names / DataFrame Column Names
+INDICATOR_OPEN_PRICE = "open"
+INDICATOR_HIGH_PRICE = "high"
+INDICATOR_LOW_PRICE = "low"
+INDICATOR_CLOSE_PRICE = "close"
+INDICATOR_VOLUME = "volume"
+
 INDICATOR_RSI = "rsi"
 INDICATOR_MACD = "macd"
-INDICATOR_MACD_SIGNAL_LINE = "macd_signal" # Name of the signal line column in MACD
+INDICATOR_MACD_SIGNAL_LINE = "macd_signal"
+INDICATOR_MACD_HISTOGRAM = "macd_hist"
 INDICATOR_ATR = "atr"
 INDICATOR_EMA_50 = "ema_50"
 INDICATOR_EMA_200 = "ema_200"
-# Add specific column names from indicator calculations if they are hardcoded elsewhere
-# e.g. MACD_HISTOGRAM = "macd_histogram"
+INDICATOR_ADX = "adx"
+INDICATOR_STOCH_K = "stoch_%k"
+INDICATOR_STOCH_D = "stoch_%d"
+INDICATOR_BB_UPPER = "bb_upper"
+INDICATOR_BB_MIDDLE = "bb_middle"
+INDICATOR_BB_LOWER = "bb_lower"
+INDICATOR_OBV = "obv"
+INDICATOR_VWAP = "vwap"
+ICHIMOKU_TENKAN = "ichimoku_tenkan"
+ICHIMOKU_KIJUN = "ichimoku_kijun"
+ICHIMOKU_SENKOU_A = "ichimoku_senkou_a"
+ICHIMOKU_SENKOU_B = "ichimoku_senkou_b"
+ICHIMOKU_CHIKOU = "ichimoku_chikou"
 
 # SR Level Types
 SR_SUPPORT = "support"
 SR_RESISTANCE = "resistance"
 
-# Timeframes - Keeping existing string usage for now, but could be constants
-# TF_M15 = "M15"
-# TF_H1 = "H1"
-# TF_H4 = "H4"
-# TF_D1 = "D1"
+# Timeframes
+TF_M15 = "M15"
+TF_H1 = "H1"
+TF_H4 = "H4"
+TF_D1 = "D1"
 
-# Strategy settings (under global_settings.strategy)
+# Strategy settings (often under global_settings.strategy or symbol_settings.strategy_params)
 CONFIG_STRATEGY_TYPE = "type"
 CONFIG_STRATEGY_MIN_SIGNAL_STRENGTH = "min_signal_strength"
 
 # Cache related
-CACHE_PREFIX_CONFIG = "config" # Used in config_manager.py
+CACHE_PREFIX_CONFIG = "config"
 
-# MT5 Trade Action types (if used explicitly beyond mt5.TRADE_ACTION_DEAL etc.)
-# TRADE_ACTION_DEAL = "TRADE_ACTION_DEAL" (already mt5.TRADE_ACTION_DEAL)
-
-# Default values if needed, though usually handled by .get(key, default_value)
-DEFAULT_MAGIC_NUMBER = 123456
-DEFAULT_DEVIATION = 10
-DEFAULT_MAX_SLIPPAGE_POINTS = 10
-DEFAULT_PAPER_TRADING = False # A safer default if not present
-DEFAULT_LOGGING_LEVEL = "INFO"
-
-# File paths
-LOGS_DIR = "logs" # Example if used for constructing log paths
-
-# Position Info Keys (if accessing position dicts with string keys)
+# Position Info Keys (standardized for internal use, map from/to MT5 object keys)
 POSITION_TICKET = "ticket"
 POSITION_SYMBOL = "symbol"
-POSITION_TYPE = "type" # Be careful if this clashes with mt5.POSITION_TYPE_*
+POSITION_TYPE = "type"
 POSITION_SL = "sl"
 POSITION_TP = "tp"
-POSITION_OPEN_PRICE = "open_price"
+POSITION_OPEN_PRICE = "price_open"
 POSITION_VOLUME = "volume"
 POSITION_MAGIC = "magic"
+POSITION_COMMENT = "comment"
+POSITION_TIME = "time" # Unix timestamp of position opening
 
-# Request keys (for MT5 order_send)
+# Request keys (for MT5 order_send, and for our simulated results)
 REQUEST_ACTION = "action"
 REQUEST_SYMBOL = "symbol"
 REQUEST_VOLUME = "volume"
@@ -129,27 +165,62 @@ REQUEST_MAGIC = "magic"
 REQUEST_COMMENT = "comment"
 REQUEST_TYPE_TIME = "type_time"
 REQUEST_TYPE_FILLING = "type_filling"
-REQUEST_POSITION = "position" # For closing/modifying by ticket
+REQUEST_POSITION = "position"
 
 # Retcodes (MT5 TRADE_RETCODE_*)
-RETCODE_DONE = 10009 # mt5.TRADE_RETCODE_DONE, useful if mt5 is not always imported where checked
+RETCODE_DONE = 10009
 
-# String literals used in logging messages or comments
+# Logging & Messages
 PAPER_TRADE_COMMENT_PREFIX = "Paper trade"
 LOG_MSG_ORDER_OPENED = "Order opened successfully"
 LOG_MSG_ORDER_FAILED = "Order failed"
-# ... and so on. This can be extensive. Start with the most common ones.
 
 # Keys for 'changes' dict in ConfigManager hot-reload
 RELOAD_CHANGES_LOGGING_LEVEL = "logging_level"
 RELOAD_CHANGES_GLOBAL_SETTINGS = "global_settings"
 RELOAD_CHANGES_SYMBOLS = "symbols"
 RELOAD_CHANGES_LOGGING_FILE_REQUIRES_RESTART = "logging_file_changed_requires_restart"
-# ... and other keys from _identify_changes
 
 # Misc
-PRIMARY_TIMEFRAME_KEY = "primary" # If used for dict access like self.config.get('timeframes', {}).get('primary', 'M30')
+PRIMARY_TIMEFRAME_KEY = "primary"
 
 # File suffixes
 YAML_SUFFIX_LOWER = ".yaml"
 YAML_SUFFIX_YML = ".yml"
+
+# Default values
+DEFAULT_MAGIC_NUMBER = 123456
+DEFAULT_DEVIATION = 10
+DEFAULT_MAX_SLIPPAGE_POINTS = 10
+DEFAULT_PAPER_TRADING = False
+DEFAULT_LOGGING_LEVEL = "INFO"
+DEFAULT_USE_ATR_SL_TP = False
+DEFAULT_ATR_SL_TP_ATR_PERIOD = 14
+DEFAULT_ATR_SL_MULTIPLIER = 1.5
+DEFAULT_ATR_TP_MULTIPLIER = 3.0
+# Trailing Stop Loss Defaults
+DEFAULT_ENABLE_TRAILING_STOP = False
+DEFAULT_TRAILING_START_PIPS_PROFIT = 50
+DEFAULT_TRAILING_STEP_PIPS = 10
+DEFAULT_TRAILING_ACTIVATION_PRICE_DISTANCE_PIPS = 20
+# Break-Even Defaults
+DEFAULT_ENABLE_BREAKEVEN_STOP = False
+DEFAULT_BREAKEVEN_PIPS_PROFIT = 30
+DEFAULT_BREAKEVEN_EXTRA_PIPS = 2
+# Time-Based Exit Defaults
+DEFAULT_ENABLE_TIME_BASED_EXIT = False
+DEFAULT_MAX_TRADE_DURATION_HOURS = 24 # e.g., 1 day
+# Daily Drawdown Defaults
+DEFAULT_ENABLE_DAILY_DRAWDOWN_LIMIT = False
+DEFAULT_MAX_DAILY_DRAWDOWN_PERCENTAGE = 2.0 # Default 2%
+DEFAULT_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT = True
+
+
+LOT_SIZE = "lot_size" # Key for RiskManager output, matches CONFIG_LOT_SIZE
+
+# Account Info Keys (from MT5 account_info object, used as dict keys)
+ACCOUNT_BALANCE = "balance"
+ACCOUNT_EQUITY = "equity"
+ACCOUNT_MARGIN = "margin"
+ACCOUNT_MARGIN_FREE = "free_margin" # or "margin_free" from MT5
+ACCOUNT_MARGIN_LEVEL = "margin_level"
