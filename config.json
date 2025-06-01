@@ -18,6 +18,10 @@
     "enable_daily_drawdown_limit": true,
     "max_daily_drawdown_percentage": 2.5,
     "close_positions_on_daily_drawdown_limit": true,
+    "enable_account_drawdown_kill_switch": false,
+    "max_account_drawdown_percentage": 10.0,
+    "close_positions_on_account_kill_switch": false,
+    "mt5_heartbeat_interval_seconds": 300,
     "enable_news_filter": false,
     "high_impact_news_windows": []
   },
@@ -38,6 +42,7 @@
       "adx_period": 14,
       "atr_multiplier": 2.0
     },
+    "strategy_name": "MACDStrategy", # Default strategy name
     "sr": {
       "method": "fractal",
       "pivot_type": "classic",
@@ -86,6 +91,7 @@
   "symbols": {
     "EURUSD": {
       "enabled": true,
+      "strategy_name": "MACDStrategy", # Strategy for EURUSD
       "lot_size": 0.01,
       "spread_limit_pips": 1.5,
       "indicators": {
@@ -101,6 +107,7 @@
     },
     "GBPUSD": {
       "enabled": false,
+      "strategy_name": "MACDStrategy", # Example, even if disabled
       "lot_size": 0.01,
       "spread_limit_pips": 2.0
     }
