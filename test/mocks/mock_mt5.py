@@ -519,7 +519,8 @@ class MockMT5:
         # This is a placeholder. A full implementation would store and filter order history.
         # For now, returning an empty list, assuming it's not critically blocking tests.
         # Tests can mock this method's return value on the MockMT5 instance if specific order history is needed.
-        logger.warning("MockMT5.history_orders_get is a placeholder and returns empty list.")
+        # logger.warning("MockMT5.history_orders_get is a placeholder and returns empty list.") # Logger not defined here
+        print("Warning: MockMT5.history_orders_get is a placeholder and returns empty list.") # Use print for mock warnings
         return []
 
     def symbols_get(self, group: Optional[str] = None) -> Optional[List[Any]]:
@@ -538,5 +539,3 @@ class MockMT5:
                 setattr(s_obj, k, v)
             mock_symbols_list.append(s_obj)
         return mock_symbols_list
-
-```

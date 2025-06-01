@@ -1,0 +1,21 @@
+# Dependencias principales
+# MetaTrader5==5.0.44
+numpy==1.24.3
+pandas==2.0.2
+ta==0.11.0 # This is the 'Technical Analysis Library' not 'pandas-ta'.
+pandas-ta==0.3.14b0 # Adding pandas-ta
+matplotlib==3.7.1
+python-dotenv==1.0.0
+python-json-logger==2.0.7
+jsonschema==4.24.0
+attrs==25.3.0
+jsonschema-specifications==2025.4.1
+referencing==0.36.2
+rpds-py==0.25.1
+backtesting==0.3.3
+bokeh==3.3.4 # Common version, or let backtesting.py resolve its preferred one
+
+# Dependencias para pruebas
+pytest==7.3.1
+pytest-mock==3.10.0
+pytest-cov==4.1.0

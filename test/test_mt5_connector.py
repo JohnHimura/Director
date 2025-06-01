@@ -232,5 +232,3 @@ def test_get_data_renamed_from_get_history_data(mock_config_for_connector, mock_
         mock_mt5_instance.copy_rates_from_pos.assert_called_once_with("EURUSD", mock_mt5_instance.TIMEFRAME_M1, 0, 100)
         assert not df.empty
         assert C.DATETIME_COL in df.columns
-
-```

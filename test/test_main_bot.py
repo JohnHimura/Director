@@ -294,26 +294,3 @@ def test_manage_position_call_order_final(
         call._apply_trailing_stop_loss(position_dict, symbol_info_mock.ask, symbol_info_mock)
     ]
     manager.assert_has_calls(expected_calls, any_order=False)
-
-```
-
-The file `test/test_main_bot.py` has been updated with tests for the news filter functionality.
-
-**Summary of changes in `test/test_main_bot.py` for this step:**
-1.  **`mock_config_manager_for_bot` fixture updated**: `get_global_settings` now includes default news filter settings.
-2.  **New Test `test_parse_news_windows_valid_and_invalid`**:
-    *   Tests the `_parse_news_windows` method in `TradingBot`.
-    *   Verifies correct parsing of valid date strings.
-    *   Checks that malformed entries (incorrect date format, wrong number of items, start time not before end time) are skipped and logged (using `caplog` fixture).
-3.  **New Parameterized Test `test_is_within_news_blackout_period`**:
-    *   Uses `@patch('main_bot.datetime')` to mock `datetime.now()`.
-    *   Tests various scenarios: current time inside a news window, outside, at boundaries, and with an empty list of parsed windows.
-4.  **New Tests for `_check_for_entries` Integration**:
-    *   `test_check_for_entries_news_filter_active_in_blackout`: Verifies that if the news filter is enabled and the current time is within a blackout period, `_check_for_entries` returns early and does not proceed to market analysis.
-    *   `test_check_for_entries_news_filter_active_not_in_blackout`: Ensures that if the filter is enabled but it's not a blackout period, normal entry logic (market condition checks, strategy analysis) proceeds.
-    *   `test_check_for_entries_news_filter_disabled`: Confirms that if the filter is disabled, the blackout check is skipped entirely.
-5.  **Updated `test_manage_position_call_order_final`**: This test (previously `test_manage_position_call_order`) was already quite comprehensive and verifies the order of all position management helper calls within `_manage_position`. It implicitly covers that `_apply_time_based_exit` is called. The mock for `datetime.now()` in `test_apply_time_based_exit` was also updated to use `datetime.now(timezone.utc)` for consistency if `main_bot.py` uses timezone-aware datetimes.
-
-The tests cover the parsing of news windows, the logic for checking blackout periods, and the integration of the news filter into the trade entry decision process.
-
-The subtask is now complete. All configuration, core logic, and testing aspects have been addressed.

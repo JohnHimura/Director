@@ -205,5 +205,3 @@ class StrategyEngine:
         # self.last_signal = result_dict.get('signal', SignalType.NONE) # Bot-level concern
 
         return result_dict
-
-```

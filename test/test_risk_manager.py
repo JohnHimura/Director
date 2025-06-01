@@ -238,4 +238,3 @@ def test_update_config_no_config_manager(default_risk_config, default_account_in
     original_rpt = rm_no_cm.risk_per_trade
     rm_no_cm.update_config(symbol="EURUSD") # Should log warning and not change
     assert rm_no_cm.risk_per_trade == original_rpt # No change
-```

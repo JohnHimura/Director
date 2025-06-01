@@ -63,7 +63,7 @@ MOCK_SCHEMA_CONTENT = {
         C.CONFIG_METATRADER5: {"type": "object", "required":["path", "server", "login", "password", "timeout", "portable"]},
         C.CONFIG_GLOBAL_SETTINGS: {"type": "object", "required": [
             C.CONFIG_MAX_TOTAL_TRADES, C.CONFIG_MAX_SLIPPAGE_PIPS, C.CONFIG_MAGIC_NUMBER, C.CONFIG_DEVIATION,
-            C.CONFIG_PAPER_TRADING, C.CONFIG_MAX_SLIPPAGE_POINTS",
+            C.CONFIG_PAPER_TRADING, C.CONFIG_MAX_SLIPPAGE_POINTS, # Corrected: Added comma, removed trailing quote from const
             C.CONFIG_KILL_SWITCH_FILE_PATH, C.CONFIG_KILL_SWITCH_CLOSE_POSITIONS, C.CONFIG_LOOP_INTERVAL
         ]},
         C.CONFIG_LOGGING: {"type": "object"},
