@@ -11,6 +11,8 @@ attrs==25.3.0
 jsonschema-specifications==2025.4.1
 referencing==0.36.2
 rpds-py==0.25.1
+backtesting==0.3.3
+bokeh==3.3.4 # Common version, or let backtesting.py resolve its preferred one
 
 # Dependencias para pruebas
 pytest==7.3.1

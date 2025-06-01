@@ -72,9 +72,9 @@ class MT5TradingOperations:
             ValidationError: If invalid parameters
             OperationError: If operation fails
         """
+        log_extras = {'symbol': symbol} # Base extras for this operation
         if self.is_kill_switch_active():
-            logger.critical("Kill switch is active. Open position operation aborted.")
-            # Return a structure similar to a failed trade or a specific kill switch status
+            logger.critical("Kill switch is active. Open position operation aborted.", extra=log_extras)
             return {
                 C.POSITION_TICKET: 0,
                 'retcode': -1, # Custom retcode for kill switch
@@ -104,7 +104,7 @@ class MT5TradingOperations:
                 fetched_price_info = self.connector.get_symbol_price(symbol)
                 current_market_price = fetched_price_info['ask'] if order_type == C.ORDER_TYPE_BUY else fetched_price_info['bid']
             except Exception as e:
-                logger.warning(f"{C.PAPER_TRADE_COMMENT_PREFIX}: Could not fetch live price for {symbol} due to {e}. Using 0.0.")
+                logger.warning(f"{C.PAPER_TRADE_COMMENT_PREFIX}: Could not fetch live price for {symbol} due to {e}. Using 0.0.", extra=log_extras)
                 current_market_price = 0.0
 
         request_params = {
@@ -121,9 +121,9 @@ class MT5TradingOperations:
         if self.paper_trading:
             simulated_ticket = int(datetime.now().timestamp() * 1000)
             log_msg = (f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating OPEN position: "
-                       f"Symbol={symbol}, Type={order_type}, Vol={volume}, Price={current_market_price}, "
+                       f"Type={order_type}, Vol={volume}, Price={current_market_price}, "
                        f"SL={stop_loss}, TP={take_profit}, Ticket={simulated_ticket}, Comment='{comment}'")
-            logger.info(log_msg)
+            logger.info(log_msg, extra={'symbol': symbol, 'ticket': simulated_ticket})
             return {
                 C.POSITION_TICKET: simulated_ticket,
                 'retcode': C.RETCODE_DONE,
@@ -164,11 +164,11 @@ class MT5TradingOperations:
                 C.REQUEST_COMMENT: result.comment,
                 'request': mt5_request
             }
-            
-            logger.info(f"{C.LOG_MSG_ORDER_OPENED}: Ticket={order_result[C.POSITION_TICKET]}, Symbol={symbol}, Type={order_type}, Vol={volume}")
+            log_extras_trade = {**log_extras, 'ticket': result.order}
+            logger.info(f"{C.LOG_MSG_ORDER_OPENED}: Type={order_type}, Vol={volume}", extra=log_extras_trade)
             return order_result
         except Exception as e:
-            logger.error(f"Error opening position for {symbol}: {str(e)}")
+            logger.error(f"Error opening position: {str(e)}", extra=log_extras)
             raise OperationError(f"Error opening position for {symbol}: {str(e)}")
     
     @retry(max_retries=3, delay=1.0, exceptions=(ConnectionError, TimeoutError, OperationError))
@@ -197,21 +197,22 @@ class MT5TradingOperations:
             ValidationError: If invalid parameters
             OperationError: If operation fails
         """
+        log_extras_ticket = {'ticket': ticket} # Base extras for this operation, symbol added later if available
         if not bypass_kill_switch and self.is_kill_switch_active():
-            logger.critical(f"Kill switch is active. Close position operation for ticket {ticket} aborted.")
+            logger.critical(f"Kill switch is active. Close position operation for ticket {ticket} aborted.", extra=log_extras_ticket)
             return {
-                C.POSITION_TICKET: ticket, # Original ticket
-                'retcode': -1, # Custom retcode for kill switch
+                C.POSITION_TICKET: ticket,
+                'retcode': -1,
                 C.REQUEST_COMMENT: "Operation aborted by kill switch",
                 'request': {}
             }
 
         if self.paper_trading:
             log_msg = (f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating CLOSE position: "
-                       f"Ticket={ticket}, Volume={volume}, Comment='{comment}'")
-            logger.info(log_msg)
+                       f"Volume={volume}, Comment='{comment}'")
+            logger.info(log_msg, extra=log_extras_ticket)
             return {
-                C.POSITION_TICKET: int(datetime.now().timestamp() * 1000),
+                C.POSITION_TICKET: int(datetime.now().timestamp() * 1000), # New simulated ticket for the close operation itself
                 'retcode': C.RETCODE_DONE,
                 C.REQUEST_COMMENT: f"{C.PAPER_TRADE_COMMENT_PREFIX} close executed successfully",
                 'request': {'action': 'close', C.POSITION_TICKET: ticket, C.REQUEST_VOLUME: volume, C.REQUEST_COMMENT: comment}
@@ -222,10 +223,9 @@ class MT5TradingOperations:
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
             # Check if it was already closed or never existed
-            history_orders = mt5.history_deals_get(position=ticket) # ticket is position ID
             history_orders = mt5.history_deals_get(position=ticket)
             if history_orders and len(history_orders) > 0:
-                 logger.warning(f"Position {ticket} may have already been closed or is a historical order.")
+                 logger.warning(f"Position {ticket} may have already been closed or is a historical order.", extra=log_extras_ticket)
                  return {
                     C.POSITION_TICKET: ticket,
                     'retcode': C.RETCODE_DONE,
@@ -233,18 +233,20 @@ class MT5TradingOperations:
                     # Using actual string keys for 'request' dict as it's for info/logging
                     'request': {'action': 'close', 'ticket': ticket}
                  }
-            raise ValidationError(f"Position with ticket {ticket} not found for closing.")
+            raise ValidationError(f"Position with ticket {ticket} not found for closing.") # This will be caught by @safe_operation
             
         position_data = positions[0]._asdict()
+        log_extras_ticket['symbol'] = position_data[C.REQUEST_SYMBOL] # Add symbol to extras now that we have it
         
         close_volume = volume if volume is not None else position_data[C.POSITION_VOLUME]
         
         if close_volume > position_data[C.POSITION_VOLUME]:
+            # Add extra to ValidationError for context if it's caught by safe_operation
             raise ValidationError(f"Close volume ({close_volume}) exceeds position volume ({position_data[C.POSITION_VOLUME]}) for ticket {ticket}")
             
         mt5_order_type_to_close = mt5.ORDER_TYPE_SELL if position_data[C.POSITION_TYPE] == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
             
-        price_info = self.connector.get_symbol_price(position_data[C.POSITION_SYMBOL])
+        price_info = self.connector.get_symbol_price(position_data[C.REQUEST_SYMBOL])
         closing_price = price_info['bid'] if position_data[C.POSITION_TYPE] == mt5.POSITION_TYPE_BUY else price_info['ask']
         
         global_settings = self.config_manager.get_global_settings()
@@ -292,14 +294,12 @@ class MT5TradingOperations:
                             # whose volume matches the closed volume and occur after the position opening.
                             # For now, sum all profits for deals associated with this position ticket that are "closing" deals.
                             # A common way is to identify deals that reduce or close the position.
-                            # For this iteration, we'll sum all deals for simplicity and note it's an approximation.
-                            # Or, better, filter for deals matching the closing order ticket.
-                            if deal.order == result.order: # Only deals from this closing order
+                            if deal.order == result.order:
                                 closed_position_profit += deal.profit + deal.commission + deal.swap
                     else:
-                        logger.warning(f"Could not fetch deals for closing order {result.order} or position {ticket} to determine profit.")
+                        logger.warning(f"Could not fetch deals for closing order {result.order} or position {ticket} to determine profit.", extra=log_extras_ticket)
             except Exception as deal_ex:
-                logger.warning(f"Could not determine profit for closed position {ticket} due to: {deal_ex}")
+                logger.warning(f"Could not determine profit for closed position {ticket} due to: {deal_ex}", extra=log_extras_ticket)
 
             close_result = {
                 C.POSITION_TICKET: result.order,
@@ -307,13 +307,13 @@ class MT5TradingOperations:
                 'retcode': result.retcode,
                 C.REQUEST_COMMENT: result.comment,
                 'request': mt5_request,
-                'profit': closed_position_profit # Add profit to the result
+                'profit': closed_position_profit
             }
             
-            logger.info(f"Position {ticket} closed successfully by order {result.order}. Realized P&L for this closure: {closed_position_profit:.2f}")
+            logger.info(f"Position closed successfully by order {result.order}. Realized P&L for this closure: {closed_position_profit:.2f}", extra=log_extras_ticket)
             return close_result
         except Exception as e:
-            logger.error(f"Error closing position {ticket}: {str(e)}")
+            logger.error(f"Error closing position: {str(e)}", extra=log_extras_ticket) # Use updated log_extras_ticket
             raise OperationError(f"Error closing position {ticket}: {str(e)}")
     
     @retry(max_retries=3, delay=1.0, exceptions=(ConnectionError, TimeoutError, OperationError))
@@ -340,19 +340,20 @@ class MT5TradingOperations:
             ValidationError: If invalid parameters
             OperationError: If operation fails
         """
+        log_extras_ticket = {'ticket': ticket} # Base extras, symbol added later
         if self.is_kill_switch_active():
-            logger.critical(f"Kill switch is active. Modify position operation for ticket {ticket} aborted.")
+            logger.critical(f"Kill switch is active. Modify position operation for ticket {ticket} aborted.", extra=log_extras_ticket)
             return {
                 C.POSITION_TICKET: ticket,
-                'retcode': -1, # Custom retcode for kill switch
+                'retcode': -1,
                 C.REQUEST_COMMENT: "Operation aborted by kill switch",
                 'request': {}
             }
 
         if self.paper_trading:
             log_msg = (f"[{C.PAPER_TRADE_COMMENT_PREFIX.upper()}] Simulating MODIFY position: "
-                       f"Ticket={ticket}, SL={stop_loss}, TP={take_profit}")
-            logger.info(log_msg)
+                       f"SL={stop_loss}, TP={take_profit}") # Ticket is in log_extras
+            logger.info(log_msg, extra=log_extras_ticket)
             return {
                 C.POSITION_TICKET: ticket,
                 'retcode': C.RETCODE_DONE,
@@ -364,9 +365,10 @@ class MT5TradingOperations:
         
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
-            raise ValidationError(f"Position with ticket {ticket} not found for modification.")
+            raise ValidationError(f"Position with ticket {ticket} not found for modification.") # Caught by @safe_operation
             
         position_data = positions[0]._asdict()
+        log_extras_ticket['symbol'] = position_data[C.REQUEST_SYMBOL] # Add symbol to extras
         
         sl_to_set = stop_loss if stop_loss is not None else position_data[C.POSITION_SL]
         tp_to_set = take_profit if take_profit is not None else position_data[C.POSITION_TP]
@@ -398,8 +400,8 @@ class MT5TradingOperations:
                 'request': mt5_request
             }
             
-            logger.info(f"Position {ticket} modified successfully: SL={sl_to_set}, TP={tp_to_set}")
+            logger.info(f"Position modified successfully: SL={sl_to_set}, TP={tp_to_set}", extra=log_extras_ticket)
             return modify_result
         except Exception as e:
-            logger.error(f"Error modifying position {ticket}: {str(e)}")
+            logger.error(f"Error modifying position: {str(e)}", extra=log_extras_ticket)
             raise OperationError(f"Error modifying position {ticket}: {str(e)}")

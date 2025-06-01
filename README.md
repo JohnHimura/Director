@@ -95,15 +95,45 @@ Este proyecto está licenciado bajo la Licencia MIT - ver el archivo LICENSE par
 
 ## Configuration
 
-Edit the `config.json` file to configure the bot. Here's an example configuration:
+The main configuration for the bot is done via the `config.json` file. However, sensitive MT5 credentials are now managed via environment variables.
+
+### MT5 Credentials Configuration (Environment Variables)
+
+To connect to your MetaTrader 5 account, you **must** set the following environment variables:
+
+-   `MT5_PATH`: The full path to your MetaTrader 5 `terminal64.exe` (or `terminal.exe`).
+    Example: `C:/Program Files/MetaTrader 5/terminal64.exe`
+-   `MT5_SERVER`: The name of your broker's server.
+    Example: `YourBroker-ServerName`
+-   `MT5_LOGIN`: Your MT5 account number.
+    Example: `12345678`
+-   `MT5_PASSWORD`: Your MT5 account password.
+    Example: `your_mt5_password`
+
+**How to set environment variables:**
+
+You can set these variables directly in your operating system, or for easier management during development, you can create a `.env` file in the root directory of the project. The bot uses `python-dotenv` to automatically load variables from this file if it exists.
+
+Example `.env` file content:
+
+```
+MT5_PATH="C:/Program Files/MetaTrader 5/terminal64.exe"
+MT5_SERVER="YourBroker-ServerName"
+MT5_LOGIN="12345678"
+MT5_PASSWORD="your_mt5_password"
+```
+**Note:** Ensure the `.env` file is added to your `.gitignore` to prevent accidentally committing credentials.
+
+### General Configuration (`config.json`)
+
+Other non-sensitive parameters are configured in `config.json`. Here's an example structure:
 
 ```json
 {
-    "meta_trader": {
-        "path": "C:/Program Files/MetaTrader 5/terminal64.exe",
-        "server": "YourBrokerServer",
-        "login": 12345678,
-        "password": "yourpassword"
+    "metatrader5": {
+        "_comment": "MT5 path, server, login, and password are now loaded from environment variables.",
+        "timeout": 60000,
+        "portable": false
     },
     "trading": {
         "symbols": ["EURUSD", "GBPUSD"],

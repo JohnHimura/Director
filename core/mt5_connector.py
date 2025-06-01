@@ -3,9 +3,10 @@ Module for interacting with MetaTrader 5.
 """
 
 import logging
+import time # Import time for sleep
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Union, Any
+from typing import Dict, List, Tuple, Optional, Union, Any, Callable # Added Callable
 import pytz
 from datetime import datetime, timedelta
 
@@ -48,17 +49,32 @@ class MT5Connector:
         # Get MT5 configuration
         self.mt5_config = self.config.get_mt5_config()
         
+        # Store connection retry parameters
+        self.max_retries = self.mt5_config.get(
+            C.CONFIG_MT5_CONNECTION_MAX_RETRIES,
+            C.DEFAULT_MT5_CONNECTION_MAX_RETRIES
+        )
+        self.base_retry_delay = self.mt5_config.get(
+            C.CONFIG_MT5_CONNECTION_RETRY_DELAY, # This constant was mistyped in prompt, should be _SECONDS
+            C.DEFAULT_MT5_CONNECTION_RETRY_DELAY_SECONDS
+        )
+
         # Cache for frequently accessed data
         self._cache = {}
         
-        # Try to initialize and connect
-        self._initialize()
+        # Try to initialize and connect (this will now use retry logic)
+        if not self._initialize():
+             logger.error("MT5Connector failed to initialize and connect after retries.")
+             # self.initialized and self.connected will be False
         
-        # Initialize trading operations
+        # Initialize trading operations only if connection was successful
         if self.initialized and self.connected:
-            # Pass the kill switch check function to trading operations
             self.trading = MT5TradingOperations(self, self._is_kill_switch_active_func)
-    
+        else:
+            # Ensure trading attribute is not set or is None if connection failed
+            self.trading = None # Or handle this state appropriately elsewhere
+            logger.warning("Trading operations module not initialized due to MT5 connection failure.")
+
     def is_kill_switch_active(self) -> bool:
         """Checks if the kill switch is currently active."""
         return self._is_kill_switch_active_func()
@@ -71,37 +87,65 @@ class MT5Connector:
             True if successful, False otherwise
         """
         if not MT5_AVAILABLE:
-            logger.error("MetaTrader5 module not available")
+            logger.error("MetaTrader5 module not available.")
             return False
-            
-        try:
-            # Initialize MT5
-            terminal_path = self.mt5_config.get(C.CONFIG_MT5_PATH)
-            if initialize_mt5(terminal_path):
-                self.initialized = True
-                
-                # Try to connect if initialization succeeded
-                server = self.mt5_config.get(C.CONFIG_MT5_SERVER)
-                # Ensure login is int, handle potential TypeError if get returns None
-                login_val = self.mt5_config.get(C.CONFIG_MT5_LOGIN)
-                login = int(login_val) if login_val is not None else 0 # Default or raise error
 
-                password = self.mt5_config.get(C.CONFIG_MT5_PASSWORD)
-                
-                if connect_mt5(server, login, password):
-                    self.connected = True
-                    logger.info(f"Connected to MT5 account {login}@{server}")
-                    return True
+        terminal_path = self.mt5_config.get(C.CONFIG_MT5_PATH)
+        server = self.mt5_config.get(C.CONFIG_MT5_SERVER)
+        login_val = self.mt5_config.get(C.CONFIG_MT5_LOGIN)
+        login = int(login_val) if login_val is not None else 0 # Should have been validated by ConfigManager
+        password = self.mt5_config.get(C.CONFIG_MT5_PASSWORD)
+        timeout_val = self.mt5_config.get(C.CONFIG_MT5_TIMEOUT, 60000) # Get timeout from config
+
+        current_retry = 0
+        while current_retry <= self.max_retries:
+            try:
+                logger.info(f"MT5 connection attempt {current_retry + 1} of {self.max_retries + 1}...")
+                # Step 1: Initialize the terminal
+                if not mt5.initialize(path=terminal_path, timeout=timeout_val):
+                    error = mt5.last_error()
+                    logger.warning(f"MT5 initialize() failed on attempt {current_retry + 1}. Error: {error}")
+                    # mt5.shutdown() # Ensure cleanup before retry
                 else:
-                    logger.error("Failed to connect to MT5 account")
+                    self.initialized = True
+                    logger.info("MT5 terminal initialized successfully.")
+
+                    # Step 2: Login to the account
+                    if not mt5.login(login=login, password=password, server=server, timeout=timeout_val):
+                        error = mt5.last_error()
+                        logger.warning(f"MT5 login() failed for account {login}@{server} on attempt {current_retry + 1}. Error: {error}")
+                        self.initialized = False # Reset initialized if login fails after successful init
+                        # mt5.shutdown() # Ensure cleanup
+                    else:
+                        self.connected = True
+                        logger.info(f"Successfully connected to MT5 account {login}@{server}.")
+                        return True # Successful connection
+
+            except Exception as e: # Catch any unexpected errors during mt5 calls
+                logger.error(f"Unexpected error during MT5 connection attempt {current_retry + 1}: {e}")
+                if self.initialized: # If initialize was true but login failed or other error
+                    # mt5.shutdown() # Attempt to cleanup
+                    pass # Let it retry if an exception occurs, could be network related
+                self.initialized = False # Reset state
+                self.connected = False
+
+            current_retry += 1
+            if current_retry <= self.max_retries:
+                current_delay = self.base_retry_delay * (2 ** (current_retry - 1))
+                logger.info(f"Retrying MT5 connection in {current_delay:.2f} seconds...")
+                time.sleep(current_delay)
             else:
-                logger.error("Failed to initialize MT5 terminal")
-                
-            return False
-        except Exception as e:
-            logger.error(f"Error initializing MT5: {str(e)}")
-            return False
-    
+                logger.error(f"MT5 connection failed after {self.max_retries +1} attempts.")
+                # Ensure initialized and connected are false if all retries fail
+                self.initialized = False
+                self.connected = False
+                return False
+
+        # Should not be reached if logic is correct, but as a fallback:
+        self.initialized = False
+        self.connected = False
+        return False
+
     def _ensure_connection(self) -> bool:
         """
         Ensure connection to MT5 is active.
