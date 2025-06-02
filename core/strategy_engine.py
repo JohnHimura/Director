@@ -185,23 +185,35 @@ class StrategyEngine:
                 'trend_direction': 0, 'signal_strength': 0.0, 'entry_price': 0.0
             }
 
-        # Data for strategy's analyze method should already have indicators calculated
-        # by the BacktestingStrategyWrapper or a similar pre-processing step in live trading.
-        # For live trading, main_bot.py -> _process_symbol -> _get_market_data
-        # then passes this data to StrategyEngine.analyze.
-        # The IndicatorCalculator logic in StrategyEngine.get_strategy_instance is for strategies
-        # that might want to do ad-hoc calculations or if indicators aren't pre-calculated on `data`.
-        # The current MACDStrategy expects pre-calculated data.
+        # Asegurarse de que los indicadores estén calculados en los DataFrames
+        try:
+            symbol_config = self.config_manager.get_symbol_config(symbol)
+            indicator_config = symbol_config.get(C.CONFIG_INDICATORS, {})
+            indicator_calculator = IndicatorCalculator(indicator_config)
+            
+            # Calcular indicadores para cada timeframe en data
+            for timeframe, df in data.items():
+                if not df.empty:
+                    # Calcular todos los indicadores necesarios
+                    indicator_calculator.calculate_all(df, indicator_config)
+                    
+                    # Asegurarse de que los indicadores esenciales estén presentes
+                    if C.INDICATOR_RSI not in df.columns:
+                        indicator_calculator.calculate_rsi(df, indicator_config)
+                    if C.INDICATOR_MACD not in df.columns or C.INDICATOR_MACD_SIGNAL_LINE not in df.columns:
+                        indicator_calculator.calculate_macd(df, indicator_config)
+                    if C.INDICATOR_ATR not in df.columns:
+                        indicator_calculator.calculate_atr(df, indicator_config)
+                    if C.INDICATOR_ADX not in df.columns:
+                        indicator_calculator.calculate_adx(df, indicator_config)
+                    
+                    # Reemplazar el DataFrame original con el que tiene los indicadores
+                    data[timeframe] = df
+        except Exception as e:
+            logger.error(f"Error calculating indicators for {symbol}: {e}", extra={'symbol': symbol}, exc_info=True)
 
         # The `analyze` method of BaseStrategy (and thus MACDStrategy) takes (self, data_dict, position_info)
         # and returns a dictionary.
         result_dict = strategy_instance.analyze(data, position_info)
-
-        # Ensure the result_dict has all necessary keys, even if the strategy fails to provide them
-        # This is also what StrategyResult class was doing.
-        # For robustness, could define a default result dict structure.
-        # However, BaseStrategy.analyze return type hint already specifies the expected dict.
-
-        # self.last_signal = result_dict.get('signal', SignalType.NONE) # Bot-level concern
 
         return result_dict

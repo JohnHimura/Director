@@ -9,6 +9,13 @@ CONFIG_SYMBOLS = "symbols"
 CONFIG_STRATEGY = "strategy" # General strategy settings, often under global_settings
 CONFIG_STRATEGY_PARAMS = "strategy_params" # Symbol-specific strategy parameters
 
+# DataFrame column names for MT5 data
+DATETIME_COL = "datetime"
+OPEN_COL = "open"
+HIGH_COL = "high"
+LOW_COL = "low" 
+CLOSE_COL = "close"
+VOLUME_COL = "volume"
 
 # Configuration Keys - Global Settings
 CONFIG_PAPER_TRADING = "paper_trading"
@@ -73,7 +80,9 @@ CONFIG_SR_FRACTAL_WINDOW = "fractal_window"
 # Configuration Keys - Risk
 CONFIG_RISK_PER_TRADE = "risk_per_trade"
 CONFIG_MAX_RISK_PER_TRADE = "max_risk_per_trade"
+CONFIG_RISK_REWARD_RATIO = "risk_reward_ratio"
 CONFIG_OLD_SL_ATR_MULTIPLIER = "sl_atr_multiplier" # From existing risk config, might be fallback
+OLD_SL_ATR_MULTIPLIER = "sl_atr_multiplier" # Para compatibilidad con versiones anteriores
 CONFIG_OLD_TP_ATR_MULTIPLIER = "tp_atr_multiplier" # From existing risk config, might be fallback
 
 # Configuration Keys - Strategy Params
@@ -99,11 +108,9 @@ CONFIG_MAX_TRADE_DURATION_HOURS = "max_trade_duration_hours"
 CONFIG_ENABLE_ADX_FILTER = "enable_adx_filter"
 CONFIG_ADX_THRESHOLD = "adx_threshold"
 # Note: ADX period for calculation is usually managed under CONFIG_INDICATORS section (e.g., "adx_period")
-# Account Drawdown Kill-Switch Config Keys
-CONFIG_ENABLE_ACCOUNT_DRAWDOWN_KILL_SWITCH = "enable_account_drawdown_kill_switch"
-CONFIG_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE = "max_account_drawdown_percentage"
-CONFIG_CLOSE_POSITIONS_ON_ACCOUNT_KILL_SWITCH = "close_positions_on_account_kill_switch"
-
+# News Filter Config Keys
+CONFIG_ENABLE_NEWS_FILTER = "enable_news_filter"
+CONFIG_HIGH_IMPACT_NEWS_WINDOWS = "high_impact_news_windows"
 
 # Order Types
 ORDER_TYPE_BUY = "BUY"
@@ -136,6 +143,9 @@ ICHIMOKU_KIJUN = "ichimoku_kijun"
 ICHIMOKU_SENKOU_A = "ichimoku_senkou_a"
 ICHIMOKU_SENKOU_B = "ichimoku_senkou_b"
 ICHIMOKU_CHIKOU = "ichimoku_chikou"
+
+INDICATOR_PLUS_DI = "plus_di"
+INDICATOR_MINUS_DI = "minus_di"
 
 # SR Level Types
 SR_SUPPORT = "support"
@@ -213,6 +223,7 @@ DEFAULT_USE_ATR_SL_TP = False
 DEFAULT_ATR_SL_TP_ATR_PERIOD = 14
 DEFAULT_ATR_SL_MULTIPLIER = 1.5
 DEFAULT_ATR_TP_MULTIPLIER = 3.0
+DEFAULT_FALLBACK_TP_RR_RATIO = 1.5  # Valor predeterminado para la relación riesgo/recompensa
 # Trailing Stop Loss Defaults
 DEFAULT_ENABLE_TRAILING_STOP = False
 DEFAULT_TRAILING_START_PIPS_PROFIT = 50
@@ -240,6 +251,8 @@ DEFAULT_MT5_CONNECTION_RETRY_DELAY_SECONDS = 5.0
 DEFAULT_ENABLE_ACCOUNT_DRAWDOWN_KILL_SWITCH = False
 DEFAULT_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE = 10.0 # Default 10% account drawdown
 DEFAULT_CLOSE_POSITIONS_ON_ACCOUNT_KILL_SWITCH = False
+# News Filter Defaults
+DEFAULT_ENABLE_NEWS_FILTER = True
 
 # State Variable Keys
 STATE_PEAK_EQUITY = "peak_account_equity"
@@ -263,3 +276,15 @@ ACCOUNT_EQUITY = "equity"
 ACCOUNT_MARGIN = "margin"
 ACCOUNT_MARGIN_FREE = "free_margin" # or "margin_free" from MT5
 ACCOUNT_MARGIN_LEVEL = "margin_level"
+
+# Indicator Configuration Keys
+CONFIG_INDICATOR_RSI_PERIOD = "rsi_period"
+CONFIG_INDICATOR_MACD_FAST = "macd_fast"
+CONFIG_INDICATOR_MACD_SLOW = "macd_slow"
+CONFIG_INDICATOR_MACD_SIGNAL = "macd_signal"
+CONFIG_INDICATOR_ATR_PERIOD = "atr_period"
+CONFIG_INDICATOR_BB_PERIOD = "bb_period"
+CONFIG_INDICATOR_BB_STD_DEV = "bb_std_dev"
+CONFIG_INDICATOR_STOCH_K_PERIOD = "stoch_k_period"
+CONFIG_INDICATOR_STOCH_D_PERIOD = "stoch_d_period"
+CONFIG_INDICATOR_STOCH_SMOOTH_K = "stoch_smooth_k"

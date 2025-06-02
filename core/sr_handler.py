@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 import abc
 from enum import Enum, auto
+from core import constants as C  # Importar las constantes
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +77,16 @@ class PivotCalculator(SRCalculator):
         pivot_config = config.get('pivots', {})
         pivot_type = pivot_config.get('type', 'standard')
         
+        # Determinar los nombres de columnas correctos (minúsculas o constantes)
+        high_col = C.INDICATOR_HIGH_PRICE if C.INDICATOR_HIGH_PRICE in df.columns else 'high'
+        low_col = C.INDICATOR_LOW_PRICE if C.INDICATOR_LOW_PRICE in df.columns else 'low'
+        close_col = C.INDICATOR_CLOSE_PRICE if C.INDICATOR_CLOSE_PRICE in df.columns else 'close'
+        
         # Get the most recent completed period's OHLC
         last_bar = df.iloc[-1]
-        h = last_bar['High']
-        l = last_bar['Low']
-        c = last_bar['Close']
+        h = last_bar[high_col]
+        l = last_bar[low_col]
+        c = last_bar[close_col]
         
         # Calculate pivot point
         if pivot_type == 'standard':
@@ -142,22 +148,65 @@ class FractalCalculator(SRCalculator):
         fractal_config = config.get('fractals', {})
         window = fractal_config.get('window', 2)
         
-        # Calculate fractals
+        # Convertir los nombres de columnas normalizados a estándar OHLC para simplificar
         df = df.copy()
         
-        # Get bearish and bullish fractals
-        bearish_fractals = ta.fractals(df['High'], df['Low'], asbool=False)
-        bullish_fractals = ta.fractals(df['High'], df['Low'], asbool=False)
+        # Verificar los nombres de las columnas disponibles
+        column_names = df.columns.tolist()
+        logger.debug(f"Available columns in DataFrame: {column_names}")
         
-        # Get the most recent fractals
-        recent_bearish = bearish_fractals[bearish_fractals == 1].tail(5)
-        recent_bullish = bullish_fractals[bullish_fractals == 1].tail(5)
+        # Mapear las columnas según las convenciones de names
+        if C.INDICATOR_LOW_PRICE in df.columns:
+            low_col = C.INDICATOR_LOW_PRICE
+        elif 'low' in df.columns:
+            low_col = 'low'
+        else:
+            logger.error("Low price column not found in DataFrame. Cannot calculate fractals.")
+            return []
+            
+        if C.INDICATOR_HIGH_PRICE in df.columns:
+            high_col = C.INDICATOR_HIGH_PRICE
+        elif 'high' in df.columns:
+            high_col = 'high'
+        else:
+            logger.error("High price column not found in DataFrame. Cannot calculate fractals.")
+            return []
+        
+        # Buscar fractales alcistas (lows) - un punto bajo rodeado por puntos más altos
+        bullish_fractals = []
+        # Buscar fractales bajistas (highs) - un punto alto rodeado por puntos más bajos
+        bearish_fractals = []
+        
+        if len(df) >= (2 * window + 1):
+            for i in range(window, len(df) - window):
+                # Comprobar fractal alcista (bullish fractal - soporte)
+                is_bullish_fractal = True
+                for j in range(1, window + 1):
+                    if df[low_col].iloc[i] >= df[low_col].iloc[i-j] or df[low_col].iloc[i] >= df[low_col].iloc[i+j]:
+                        is_bullish_fractal = False
+                        break
+                
+                if is_bullish_fractal:
+                    bullish_fractals.append((df.index[i], df[low_col].iloc[i]))
+                
+                # Comprobar fractal bajista (bearish fractal - resistencia)
+                is_bearish_fractal = True
+                for j in range(1, window + 1):
+                    if df[high_col].iloc[i] <= df[high_col].iloc[i-j] or df[high_col].iloc[i] <= df[high_col].iloc[i+j]:
+                        is_bearish_fractal = False
+                        break
+                
+                if is_bearish_fractal:
+                    bearish_fractals.append((df.index[i], df[high_col].iloc[i]))
         
         levels = []
         
-        # Add resistance levels from bearish fractals (highs)
-        for idx, val in recent_bearish.items():
-            price = df.loc[idx, 'High']
+        # Tomar solo los últimos 5 fractales de cada tipo
+        recent_bearish = bearish_fractals[-5:] if len(bearish_fractals) > 5 else bearish_fractals
+        recent_bullish = bullish_fractals[-5:] if len(bullish_fractals) > 5 else bullish_fractals
+        
+        # Añadir niveles de resistencia de fractales bajistas (altos)
+        for idx, price in recent_bearish:
             levels.append(SRLevel(
                 price=price,
                 strength=0.9,
@@ -166,9 +215,8 @@ class FractalCalculator(SRCalculator):
                 timestamp=idx
             ))
         
-        # Add support levels from bullish fractals (lows)
-        for idx, val in recent_bullish.items():
-            price = df.loc[idx, 'Low']
+        # Añadir niveles de soporte de fractales alcistas (bajos)
+        for idx, price in recent_bullish:
             levels.append(SRLevel(
                 price=price,
                 strength=0.9,
@@ -177,7 +225,6 @@ class FractalCalculator(SRCalculator):
                 timestamp=idx
             ))
         
-        # Merge nearby levels (delegamos al SRHandler)
         return levels
 
 class ZigZagCalculator(SRCalculator):
@@ -202,11 +249,16 @@ class ZigZagCalculator(SRCalculator):
         deviation = zigzag_config.get('deviation', 5)
         backstep = zigzag_config.get('backstep', 3)
         
+        # Determinar los nombres de columnas correctos (minúsculas o constantes)
+        high_col = C.INDICATOR_HIGH_PRICE if C.INDICATOR_HIGH_PRICE in df.columns else 'high'
+        low_col = C.INDICATOR_LOW_PRICE if C.INDICATOR_LOW_PRICE in df.columns else 'low'
+        close_col = C.INDICATOR_CLOSE_PRICE if C.INDICATOR_CLOSE_PRICE in df.columns else 'close'
+        
         # Calculate ZigZag
         zigzag = ta.zigzag(
-            high=df['High'],
-            low=df['Low'],
-            close=df['Close'],
+            high=df[high_col],
+            low=df[low_col],
+            close=df[close_col],
             depth=depth,
             deviation=deviation,
             backstep=backstep,
@@ -224,9 +276,9 @@ class ZigZagCalculator(SRCalculator):
         for idx, row in swing_points.iterrows():
             if not np.isnan(row['ZIGZAG']):
                 # Determine if it's a high or low
-                if row['High'] == row['ZIGZAG']:  # Swing high (resistance)
+                if row[high_col] == row['ZIGZAG']:  # Swing high (resistance)
                     levels.append(SRLevel(
-                        price=row['High'],
+                        price=row[high_col],
                         strength=0.85,
                         type='resistance',
                         method='zigzag',
@@ -234,7 +286,7 @@ class ZigZagCalculator(SRCalculator):
                     ))
                 else:  # Swing low (support)
                     levels.append(SRLevel(
-                        price=row['Low'],
+                        price=row[low_col],
                         strength=0.85,
                         type='support',
                         method='zigzag',
@@ -306,7 +358,8 @@ class SRHandler:
         levels = calculator.calculate(df, config)
         
         # Process levels (merge, filter, etc.)
-        threshold = df['Close'].iloc[-1] * 0.005  # 0.5% threshold
+        close_col = C.INDICATOR_CLOSE_PRICE if C.INDICATOR_CLOSE_PRICE in df.columns else 'close'
+        threshold = df[close_col].iloc[-1] * 0.005  # 0.5% threshold
         levels = self._merge_nearby_levels(levels, threshold)
         
         return levels

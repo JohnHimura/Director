@@ -13,6 +13,8 @@ from datetime import datetime # For get_history_data
 # Import from utility modules
 from .utils.error_handler import ConnectionError as MT5ConnectionError # Specific import
 from .utils.error_handler import OperationError, ValidationError # Keep other specific errors
+from .utils.error_handler import safe_operation # Import safe_operation
+from .utils.error_handler import retry # Import retry
 # mt5_utils are mostly superseded by direct calls within this class now,
 # but disconnect_mt5 might still be used from there.
 from .utils.mt5_utils import disconnect_mt5
@@ -285,5 +287,3 @@ class MT5Connector:
     
     def __del__(self):
         self.disconnect()
-
-```
