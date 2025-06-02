@@ -19,11 +19,13 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.config_manager import ConfigManager
 from core.logging_setup import setup_logging, get_log_context
-from core.mt5_connector import MT5Connector, ConnectionError as MT5ConnectionError # Import specific error
+from core.mt5_connector import MT5Connector
+from core.utils.error_handler import ConnectionError as MT5ConnectionError # Import specific error
 from core.strategy_engine import StrategyEngine, SignalType
 from core.risk_manager import RiskManager
 from core.state_manager import StateManager # Import StateManager
 from core import constants as C
+from core.constants import CONFIG_ENABLE_NEWS_FILTER, DEFAULT_ENABLE_NEWS_FILTER
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +96,7 @@ class TradingBot:
         self.close_positions_on_dd_limit = global_settings.get(C.CONFIG_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT, C.DEFAULT_CLOSE_POSITIONS_ON_DAILY_DRAWDOWN_LIMIT)
 
         # News Filter state
-        self.enable_news_filter = global_settings.get(C.CONFIG_ENABLE_NEWS_FILTER, C.DEFAULT_ENABLE_NEWS_FILTER)
+        self.enable_news_filter = global_settings.get(CONFIG_ENABLE_NEWS_FILTER, DEFAULT_ENABLE_NEWS_FILTER) # Direct import to avoid AttributeError
         self.high_impact_news_windows_config = global_settings.get(C.CONFIG_HIGH_IMPACT_NEWS_WINDOWS, [])
         self.parsed_news_windows = []
         self._parse_news_windows(self.high_impact_news_windows_config)
@@ -151,7 +153,7 @@ class TradingBot:
     
     def initialize(self) -> bool:
         try:
-            if not self.mt5.initialize():
+            if not self.mt5.check_connection_and_reconnect():
                 logger.error("Failed to initialize MT5 connection after retries. Bot cannot start.")
                 return False
             
@@ -348,7 +350,17 @@ class TradingBot:
         log_ctx.correlation_id = str(uuid.uuid4())
 
         try:
-            self._check_for_config_reload()
+            # Check and reload config if modified
+            reloaded, changes = self.config_manager.check_and_reload_config()
+            if reloaded:
+                # Handle config changes if necessary (e.g., update logging level, strategy params, etc.)
+                # This part might need more specific implementation based on what config changes require immediate action
+                if C.RELOAD_CHANGES_LOGGING_LEVEL in changes:
+                    setup_logging(config_manager=self.config_manager)
+                    logger.info("Logging level updated due to config reload.")
+                # Example: if symbol-specific params change, potentially update strategy engine or risk manager if they hold cached config
+                # For now, we assume components fetch latest config via config_manager.get_* methods when needed.
+
             self._check_kill_switch()
 
             if self.kill_switch_activated and not self.account_kill_switch_hit: # File-based KS
@@ -815,6 +827,12 @@ class TradingBot:
         if not symbol_info: logger.error(f"Could not get symbol info for {symbol} in entry check", extra=log_extras_symbol); return
         current_price = symbol_info.ask if signal_type == SignalType.BUY else symbol_info.bid
         stop_loss_price = analysis.get(C.POSITION_SL, 0.0)
+        
+        # Verificar que el stop_loss_price sea válido antes de continuar
+        if stop_loss_price == 0.0:
+            logger.warning(f"Stop loss price is 0.0 for {symbol}. Skipping trade entry. Analysis message: {analysis.get('message')}", extra=log_extras_symbol)
+            return
+            
         position_size_details = self.risk_manager.calculate_position_size(symbol=symbol, entry_price=current_price, stop_loss=stop_loss_price, risk_amount=None)
         calculated_lot_size = position_size_details.get(C.LOT_SIZE, 0.0)
         if calculated_lot_size <= 0: logger.warning(f"Invalid position size ({calculated_lot_size}) for {symbol}", extra=log_extras_symbol); return
@@ -939,4 +957,4 @@ def main():
 
 if __name__ == "__main__":
     main() # Call main directly
-```
+

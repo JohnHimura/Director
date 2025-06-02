@@ -3,6 +3,47 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+
+"""
+# Estrategia de Confluencia para Backtesting
+
+## Descripción General
+Esta estrategia es un wrapper para usar el motor de estrategia principal (StrategyEngine) en un entorno 
+de backtesting compatible con el framework 'backtesting.py'. Permite probar las estrategias implementadas 
+(como MACDStrategy) sobre datos históricos utilizando la misma lógica que en trading en vivo.
+
+## Características
+1. **Adaptador de Estrategias**: Actúa como puente entre el framework de backtesting y el motor de estrategia
+2. **Multi-timeframe**: Soporta análisis de múltiples timeframes (aunque la implementación depende de cómo se preparen los datos)
+3. **Gestión de Posiciones**: Maneja entradas, salidas, stops y targets
+4. **Compatibilidad Total**: Usa exactamente la misma lógica que el trading en vivo
+
+## Flujo de Operación
+1. Inicialización con configuración y símbolo específico
+2. En cada 'tick' (método next()):
+   - Prepara los datos en formato compatible con StrategyEngine
+   - Pasa información de posición existente si está presente
+   - Llama al motor de estrategia para analizar y generar señales
+   - Ejecuta órdenes según las señales recibidas (compra, venta, cierre)
+   - Actualiza el seguimiento de posición, stop loss y take profit
+
+## Integración con StrategyEngine
+- Utiliza la misma configuración que el trading en vivo
+- Las señales de trading son generadas por la estrategia configurada en StrategyEngine
+- Los parámetros de entrada/salida y gestión de riesgo son idénticos al trading en vivo
+
+## Consideraciones de Implementación
+- Requiere datos históricos organizados por timeframe en diccionarios
+- Para backtesting completo con múltiples timeframes, los datos deben ser sincronizados
+- Modificar el preprocesamiento de datos según la estructura de la estrategia
+
+## Uso
+1. Inicializar con ruta de configuración y símbolo
+2. Configurar engine con la estrategia deseada (MACD, etc.)
+3. Ejecutar backtesting con los datos históricos
+4. Analizar resultados y optimizar parámetros
+"""
+
 # Ensure the path is correct for your project structure
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from core.strategy_engine import StrategyEngine, SignalType

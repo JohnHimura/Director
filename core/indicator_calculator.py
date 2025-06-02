@@ -72,23 +72,23 @@ class TrendIndicators(IndicatorGroup):
         """
         # Ensure column names are lowercase for consistency
         # This should ideally be done once when df is first received by IndicatorCalculator
-        # df.columns = [col.lower() for col in df.columns]
-        close_prices = df[C.INDICATOR_CLOSE_PRICE if hasattr(C, 'INDICATOR_CLOSE_PRICE') else 'close']
+        close_prices = df['close'] if 'close' in df.columns else df['Close']
 
         # Calculate MACD
         fast = int(config.get(C.CONFIG_INDICATOR_MACD_FAST, 12))
         slow = int(config.get(C.CONFIG_INDICATOR_MACD_SLOW, 26))
         signal_period = int(config.get(C.CONFIG_INDICATOR_MACD_SIGNAL, 9)) # Renamed signal to signal_period
 
-        # Cache key for MACD
-        macd_cache_key = f"macd:{pd.util.hash_pandas_object(close_prices).sum()}:{fast}:{slow}:{signal_period}"
+        # Cache key for MACD - usar función hash para evitar overflow
+        close_hash = hash(pd.util.hash_pandas_object(close_prices).sum())
+        macd_cache_key = f"macd:{close_hash}:{fast}:{slow}:{signal_period}"
         cached_macd_data = cache_manager.get(macd_cache_key)
 
         if cached_macd_data is not None:
             logger.debug(f"MACD cache hit for key: {macd_cache_key}")
-            df[C.INDICATOR_MACD] = cached_macd_data[C.INDICATOR_MACD]
-            df[C.INDICATOR_MACD_SIGNAL_LINE] = cached_macd_data[C.INDICATOR_MACD_SIGNAL_LINE]
-            # df[C.INDICATOR_MACD_HISTOGRAM] = cached_macd_data[C.INDICATOR_MACD_HISTOGRAM] # If histogram is needed
+            df['macd'] = cached_macd_data['macd']
+            df['macd_signal'] = cached_macd_data['macd_signal']
+            # df['macd_histogram'] = cached_macd_data['macd_histogram'] # If histogram is needed
         else:
             logger.debug(f"MACD cache miss for key: {macd_cache_key}")
             macd_df = ta.macd(
@@ -103,28 +103,27 @@ class TrendIndicators(IndicatorGroup):
                 signal_col_name = f'MACDs_{fast}_{slow}_{signal_period}'
                 # hist_col_name = f'MACDh_{fast}_{slow}_{signal_period}'
 
-                df[C.INDICATOR_MACD] = macd_df[macd_col_name]
-                df[C.INDICATOR_MACD_SIGNAL_LINE] = macd_df[signal_col_name]
-                # df[C.INDICATOR_MACD_HISTOGRAM] = macd_df[hist_col_name]
+                df['macd'] = macd_df[macd_col_name]
+                df['macd_signal'] = macd_df[signal_col_name]
+                # df['macd_histogram'] = macd_df[hist_col_name]
 
                 # Store necessary series in cache
                 cache_manager.set(macd_cache_key, {
-                    C.INDICATOR_MACD: df[C.INDICATOR_MACD],
-                    C.INDICATOR_MACD_SIGNAL_LINE: df[C.INDICATOR_MACD_SIGNAL_LINE],
-                    # C.INDICATOR_MACD_HISTOGRAM: df[C.INDICATOR_MACD_HISTOGRAM]
+                    'macd': df['macd'],
+                    'macd_signal': df['macd_signal'],
+                    # 'macd_histogram': df['macd_histogram']
                 })
         
-        # Calculate Moving Averages
         # Calculate Moving Averages
         for ma_type_str in ['sma', 'ema']: # ma_type_str to avoid conflict
             for period_val in [20, 50, 100, 200]: # period_val to avoid conflict
                 ma_col_name = f'{ma_type_str.upper()}_{period_val}' # e.g., EMA_50
                 # Use more specific config keys if available, e.g., config.get('enable_ema_50', True)
                 if config.get(f'enable_{ma_type_str}{period_val}', True):
-                    ma_cache_key = f"{ma_type_str}:{pd.util.hash_pandas_object(close_prices).sum()}:{period_val}"
+                    ma_cache_key = f"{ma_type_str}:{close_hash}:{period_val}"
                     cached_ma = cache_manager.get(ma_cache_key)
                     if cached_ma is not None:
-                        df[ma_col_name] = cached_ma
+                        df[ma_col_name.lower()] = cached_ma
                     else:
                         if ma_type_str == 'sma':
                             ma_series = ta.sma(close_prices, length=period_val)
@@ -132,29 +131,29 @@ class TrendIndicators(IndicatorGroup):
                             ma_series = ta.ema(close_prices, length=period_val)
 
                         if ma_series is not None:
-                            df[ma_col_name] = ma_series
+                            df[ma_col_name.lower()] = ma_series
                             cache_manager.set(ma_cache_key, ma_series)
         
         # Calculate ADX
         adx_period_val = int(config.get('adx_period', 14)) # adx_period_val
         # ADX uses High, Low, Close. Create a combined hash for these.
-        hlc_hash = (pd.util.hash_pandas_object(df[C.INDICATOR_HIGH_PRICE if hasattr(C, 'INDICATOR_HIGH_PRICE') else 'high']).sum() +
-                    pd.util.hash_pandas_object(df[C.INDICATOR_LOW_PRICE if hasattr(C, 'INDICATOR_LOW_PRICE') else 'low']).sum() +
-                    close_hash) # close_hash from MACD section, or re-calculate if not available
+        high_prices = df['high'] if 'high' in df.columns else df['High']
+        low_prices = df['low'] if 'low' in df.columns else df['Low']
+        hlc_hash = hash(pd.util.hash_pandas_object(high_prices).sum()) ^ hash(pd.util.hash_pandas_object(low_prices).sum()) ^ close_hash
         
         adx_cache_key = f"adx:{hlc_hash}:{adx_period_val}"
         cached_adx_data = cache_manager.get(adx_cache_key)
 
         if cached_adx_data is not None:
             logger.debug(f"ADX cache hit for key: {adx_cache_key}")
-            df[C.INDICATOR_ADX if hasattr(C, 'INDICATOR_ADX') else 'ADX'] = cached_adx_data['ADX']
+            df['adx'] = cached_adx_data['ADX']
             # df['DMP'] = cached_adx_data['DMP'] # Define constants if using these
             # df['DMN'] = cached_adx_data['DMN']
         else:
             logger.debug(f"ADX cache miss for key: {adx_cache_key}")
             adx_df = ta.adx(
-                high=df[C.INDICATOR_HIGH_PRICE if hasattr(C, 'INDICATOR_HIGH_PRICE') else 'high'],
-                low=df[C.INDICATOR_LOW_PRICE if hasattr(C, 'INDICATOR_LOW_PRICE') else 'low'],
+                high=high_prices,
+                low=low_prices,
                 close=close_prices,
                 length=adx_period_val,
                 append=False
@@ -163,11 +162,11 @@ class TrendIndicators(IndicatorGroup):
                 adx_col = f'ADX_{adx_period_val}'
                 # dmp_col = f'DMP_{adx_period_val}'
                 # dmn_col = f'DMN_{adx_period_val}'
-                df[C.INDICATOR_ADX if hasattr(C, 'INDICATOR_ADX') else 'ADX'] = adx_df[adx_col]
+                df['adx'] = adx_df[adx_col]
                 # df['DMP'] = adx_df[dmp_col]
                 # df['DMN'] = adx_df[dmn_col]
                 cache_manager.set(adx_cache_key, {
-                    'ADX': df[C.INDICATOR_ADX if hasattr(C, 'INDICATOR_ADX') else 'ADX'],
+                    'ADX': df['adx'],
                     # 'DMP': df['DMP'], 'DMN': df['DMN']
                 })
 
@@ -180,46 +179,47 @@ class MomentumIndicators(IndicatorGroup):
         Calculate momentum indicators.
         
         Args:
-            df: DataFrame with OHLCV data (expected to have 'close', 'high', 'low' columns)
+            df: DataFrame with OHLCV data (expected to have 'close' column)
             config: Configuration dictionary with momentum indicator parameters
         """
-        close_prices = df[C.INDICATOR_CLOSE_PRICE if hasattr(C, 'INDICATOR_CLOSE_PRICE') else 'close']
-        high_prices = df[C.INDICATOR_HIGH_PRICE if hasattr(C, 'INDICATOR_HIGH_PRICE') else 'high']
-        low_prices = df[C.INDICATOR_LOW_PRICE if hasattr(C, 'INDICATOR_LOW_PRICE') else 'low']
-
+        close_prices = df['close'] if 'close' in df.columns else df['Close']
+        
         # Calculate RSI
         rsi_period = int(config.get(C.CONFIG_INDICATOR_RSI_PERIOD, 14))
         
-        rsi_cache_key = f"rsi:{pd.util.hash_pandas_object(close_prices).sum()}:{rsi_period}"
+        # Hash for caching - usar hash() para evitar overflow
+        close_hash = hash(pd.util.hash_pandas_object(close_prices).sum())
+        rsi_cache_key = f"rsi:{close_hash}:{rsi_period}"
         cached_rsi = cache_manager.get(rsi_cache_key)
-
+        
         if cached_rsi is not None:
             logger.debug(f"RSI cache hit for key: {rsi_cache_key}")
-            df[C.INDICATOR_RSI] = cached_rsi
+            df['rsi'] = cached_rsi
         else:
             logger.debug(f"RSI cache miss for key: {rsi_cache_key}")
             rsi_series = ta.rsi(close_prices, length=rsi_period)
             if rsi_series is not None:
-                df[C.INDICATOR_RSI] = rsi_series
+                df['rsi'] = rsi_series
                 cache_manager.set(rsi_cache_key, rsi_series)
         
-        # Calculate Stochastic Oscillator
-        # Calculate Stochastic Oscillator
-        stoch_k_period = int(config.get('stoch_k_period', 14))
-        stoch_d_period = int(config.get('stoch_d_period', 3))
-        stoch_k_slowing = int(config.get('stoch_k_slowing', 3))
-
-        hlc_hash = (pd.util.hash_pandas_object(high_prices).sum() +
-                    pd.util.hash_pandas_object(low_prices).sum() +
-                    pd.util.hash_pandas_object(close_prices).sum())
-
-        stoch_cache_key = f"stoch:{hlc_hash}:{stoch_k_period}:{stoch_d_period}:{stoch_k_slowing}"
+        # Calculate Stochastic
+        stoch_k_period = int(config.get(C.CONFIG_INDICATOR_STOCH_K_PERIOD, 14))
+        stoch_d_period = int(config.get(C.CONFIG_INDICATOR_STOCH_D_PERIOD, 3))
+        stoch_smooth_k = int(config.get(C.CONFIG_INDICATOR_STOCH_SMOOTH_K, 3))
+        
+        high_prices = df['high'] if 'high' in df.columns else df['High']
+        low_prices = df['low'] if 'low' in df.columns else df['Low']
+        
+        # Combine all relevant series into a single hash for stochastic - usar XOR para evitar overflow
+        hlc_hash = hash(pd.util.hash_pandas_object(high_prices).sum()) ^ hash(pd.util.hash_pandas_object(low_prices).sum()) ^ close_hash
+        
+        stoch_cache_key = f"stoch:{hlc_hash}:{stoch_k_period}:{stoch_d_period}:{stoch_smooth_k}"
         cached_stoch_data = cache_manager.get(stoch_cache_key)
-
+        
         if cached_stoch_data is not None:
             logger.debug(f"Stochastic cache hit for key: {stoch_cache_key}")
-            df[C.INDICATOR_STOCH_K if hasattr(C, 'INDICATOR_STOCH_K') else 'Stoch_%K'] = cached_stoch_data['STOCHk']
-            df[C.INDICATOR_STOCH_D if hasattr(C, 'INDICATOR_STOCH_D') else 'Stoch_%D'] = cached_stoch_data['STOCHd']
+            df['stoch_%k'] = cached_stoch_data['stoch_%k']
+            df['stoch_%d'] = cached_stoch_data['stoch_%d']
         else:
             logger.debug(f"Stochastic cache miss for key: {stoch_cache_key}")
             stoch_df = ta.stoch(
@@ -228,32 +228,22 @@ class MomentumIndicators(IndicatorGroup):
                 close=close_prices,
                 k=stoch_k_period,
                 d=stoch_d_period,
-                smooth_k=stoch_k_slowing,
+                smooth_k=stoch_smooth_k,
                 append=False
             )
             if stoch_df is not None and not stoch_df.empty:
-                stoch_k_col = f'STOCHk_{stoch_k_period}_{stoch_d_period}_{stoch_k_slowing}' # pandas-ta < 0.3.15 uses k,d,smooth_k; >= uses k,d,smooth_k
-                stoch_d_col = f'STOCHd_{stoch_k_period}_{stoch_d_period}_{stoch_k_slowing}'
-                # Need to check exact column names from pandas_ta for STOCH, they can be tricky.
-                # It might be STOCHk_14_3_3 and STOCHd_14_3_3 if d is passed to smooth_k in older versions.
-                # For recent versions, smooth_k is explicit. The example used smooth_k=k_slowing, d=d_period.
-                # Let's assume the column names are based on k, d, and smooth_k (which is the third param in ta.stoch call)
-                # For ta.stoch(k=14, d=3, smooth_k=3), cols are STOCHk_14_3_3, STOCHd_14_3_3
-                stoch_k_col_actual = f'STOCHk_{stoch_k_period}_{stoch_d_period}_{stoch_k_slowing}'
-                stoch_d_col_actual = f'STOCHd_{stoch_k_period}_{stoch_d_period}_{stoch_k_slowing}'
-                if stoch_k_col_actual not in stoch_df.columns: # Try alternative common naming from older pandas_ta
-                    stoch_k_col_actual = f'STOCHk_{stoch_k_period}_{stoch_k_slowing}_{stoch_d_period}'
-                    stoch_d_col_actual = f'STOCHd_{stoch_k_period}_{stoch_k_slowing}_{stoch_d_period}'
-
-                if stoch_k_col_actual in stoch_df.columns and stoch_d_col_actual in stoch_df.columns:
-                    df[C.INDICATOR_STOCH_K if hasattr(C, 'INDICATOR_STOCH_K') else 'Stoch_%K'] = stoch_df[stoch_k_col_actual]
-                    df[C.INDICATOR_STOCH_D if hasattr(C, 'INDICATOR_STOCH_D') else 'Stoch_%D'] = stoch_df[stoch_d_col_actual]
-                    cache_manager.set(stoch_cache_key, {
-                        'STOCHk': df[C.INDICATOR_STOCH_K if hasattr(C, 'INDICATOR_STOCH_K') else 'Stoch_%K'],
-                        'STOCHd': df[C.INDICATOR_STOCH_D if hasattr(C, 'INDICATOR_STOCH_D') else 'Stoch_%D']
-                    })
-                else:
-                    logger.warning(f"Stochastic column names not found in expected format. Available: {stoch_df.columns.tolist()}")
+                # Get the correct column names from pandas_ta output
+                k_col = f"STOCHk_{stoch_k_period}_{stoch_d_period}_{stoch_smooth_k}"
+                d_col = f"STOCHd_{stoch_k_period}_{stoch_d_period}_{stoch_smooth_k}"
+                
+                df['stoch_%k'] = stoch_df[k_col]
+                df['stoch_%d'] = stoch_df[d_col]
+                
+                # Store in cache
+                cache_manager.set(stoch_cache_key, {
+                    'stoch_%k': stoch_df[k_col],
+                    'stoch_%d': stoch_df[d_col]
+                })
 
 
 class VolatilityIndicators(IndicatorGroup):
@@ -261,51 +251,67 @@ class VolatilityIndicators(IndicatorGroup):
     
     @handle_empty_df
     def calculate(self, df: pd.DataFrame, config: Dict[str, Any]) -> None:
-        close_prices = df[C.INDICATOR_CLOSE_PRICE if hasattr(C, 'INDICATOR_CLOSE_PRICE') else 'close']
-        high_prices = df[C.INDICATOR_HIGH_PRICE if hasattr(C, 'INDICATOR_HIGH_PRICE') else 'high']
-        low_prices = df[C.INDICATOR_LOW_PRICE if hasattr(C, 'INDICATOR_LOW_PRICE') else 'low']
-
+        """
+        Calculate volatility indicators.
+        
+        Args:
+            df: DataFrame with OHLCV data (expected to have 'high', 'low', 'close' columns)
+            config: Configuration dictionary with volatility indicator parameters
+        """
+        close_prices = df['close'] if 'close' in df.columns else df['Close']
+        high_prices = df['high'] if 'high' in df.columns else df['High']
+        low_prices = df['low'] if 'low' in df.columns else df['Low']
+        
         # Calculate ATR
-        atr_period_val = int(config.get(C.CONFIG_INDICATOR_ATR_PERIOD, 14))
-        hlc_hash = (pd.util.hash_pandas_object(high_prices).sum() +
-                    pd.util.hash_pandas_object(low_prices).sum() +
-                    pd.util.hash_pandas_object(close_prices).sum())
-        atr_cache_key = f"atr:{hlc_hash}:{atr_period_val}"
+        atr_period = int(config.get(C.CONFIG_INDICATOR_ATR_PERIOD, 14))
+        
+        # Combine high, low, close for ATR hashing - usar XOR para evitar overflow
+        hlc_hash = hash(pd.util.hash_pandas_object(high_prices).sum()) ^ hash(pd.util.hash_pandas_object(low_prices).sum()) ^ hash(pd.util.hash_pandas_object(close_prices).sum())
+        
+        atr_cache_key = f"atr:{hlc_hash}:{atr_period}"
         cached_atr = cache_manager.get(atr_cache_key)
-
+        
         if cached_atr is not None:
-            df[C.INDICATOR_ATR] = cached_atr
+            logger.debug(f"ATR cache hit for key: {atr_cache_key}")
+            df['atr'] = cached_atr
         else:
-            atr_series = ta.atr(high=high_prices, low=low_prices, close=close_prices, length=atr_period_val)
+            logger.debug(f"ATR cache miss for key: {atr_cache_key}")
+            atr_series = ta.atr(high=high_prices, low=low_prices, close=close_prices, length=atr_period)
             if atr_series is not None:
-                df[C.INDICATOR_ATR] = atr_series
+                df['atr'] = atr_series
                 cache_manager.set(atr_cache_key, atr_series)
         
         # Calculate Bollinger Bands
-        bb_length_val = int(config.get('bb_length', 20)) # Add constants for bb_length, bb_std
-        bb_std_val = float(config.get('bb_std', 2.0))
+        bb_period = int(config.get(C.CONFIG_INDICATOR_BB_PERIOD, 20))
+        bb_std = float(config.get(C.CONFIG_INDICATOR_BB_STD_DEV, 2.0))
         
-        bb_cache_key = f"bbands:{pd.util.hash_pandas_object(close_prices).sum()}:{bb_length_val}:{bb_std_val}"
+        # Hash for Bollinger Bands - usar hash() para evitar overflow
+        close_hash = hash(pd.util.hash_pandas_object(close_prices).sum())
+        bb_cache_key = f"bbands:{close_hash}:{bb_period}:{bb_std}"
         cached_bb_data = cache_manager.get(bb_cache_key)
-
+        
         if cached_bb_data is not None:
-            df[C.INDICATOR_BB_UPPER if hasattr(C,'INDICATOR_BB_UPPER') else 'BB_Upper'] = cached_bb_data['BBU']
-            df[C.INDICATOR_BB_MIDDLE if hasattr(C,'INDICATOR_BB_MIDDLE') else 'BB_Middle'] = cached_bb_data['BBM']
-            df[C.INDICATOR_BB_LOWER if hasattr(C,'INDICATOR_BB_LOWER') else 'BB_Lower'] = cached_bb_data['BBL']
+            logger.debug(f"Bollinger Bands cache hit for key: {bb_cache_key}")
+            df['bb_upper'] = cached_bb_data['bb_upper']
+            df['bb_middle'] = cached_bb_data['bb_middle']
+            df['bb_lower'] = cached_bb_data['bb_lower']
         else:
-            bb_df = ta.bbands(close=close_prices, length=bb_length_val, std=bb_std_val, append=False)
-            if bb_df is not None and not bb_df.empty:
-                upper_col = f'BBU_{bb_length_val}_{bb_std_val:.1f}'
-                middle_col = f'BBM_{bb_length_val}_{bb_std_val:.1f}'
-                lower_col = f'BBL_{bb_length_val}_{bb_std_val:.1f}'
-
-                df[C.INDICATOR_BB_UPPER if hasattr(C,'INDICATOR_BB_UPPER') else 'BB_Upper'] = bb_df[upper_col]
-                df[C.INDICATOR_BB_MIDDLE if hasattr(C,'INDICATOR_BB_MIDDLE') else 'BB_Middle'] = bb_df[middle_col]
-                df[C.INDICATOR_BB_LOWER if hasattr(C,'INDICATOR_BB_LOWER') else 'BB_Lower'] = bb_df[lower_col]
+            logger.debug(f"Bollinger Bands cache miss for key: {bb_cache_key}")
+            bbands_df = ta.bbands(close=close_prices, length=bb_period, std=bb_std, append=False)
+            if bbands_df is not None and not bbands_df.empty:
+                bb_upper_col = f"BBU_{bb_period}_{bb_std}"
+                bb_middle_col = f"BBM_{bb_period}_{bb_std}"
+                bb_lower_col = f"BBL_{bb_period}_{bb_std}"
+                
+                df['bb_upper'] = bbands_df[bb_upper_col]
+                df['bb_middle'] = bbands_df[bb_middle_col]
+                df['bb_lower'] = bbands_df[bb_lower_col]
+                
+                # Store in cache
                 cache_manager.set(bb_cache_key, {
-                    'BBU': df[C.INDICATOR_BB_UPPER if hasattr(C,'INDICATOR_BB_UPPER') else 'BB_Upper'],
-                    'BBM': df[C.INDICATOR_BB_MIDDLE if hasattr(C,'INDICATOR_BB_MIDDLE') else 'BB_Middle'],
-                    'BBL': df[C.INDICATOR_BB_LOWER if hasattr(C,'INDICATOR_BB_LOWER') else 'BB_Lower']
+                    'bb_upper': bbands_df[bb_upper_col],
+                    'bb_middle': bbands_df[bb_middle_col],
+                    'bb_lower': bbands_df[bb_lower_col]
                 })
 
 class VolumeIndicators(IndicatorGroup):
@@ -314,56 +320,53 @@ class VolumeIndicators(IndicatorGroup):
     @handle_empty_df
     def calculate(self, df: pd.DataFrame, config: Dict[str, Any]) -> None:
         """
-        Calculate volume-based indicators.
+        Calculate volume indicators.
         
         Args:
-            df: DataFrame with OHLCV data (expected to have 'close', 'high', 'low', 'volume' columns)
+            df: DataFrame with OHLCV data (expected to have 'close', 'volume' columns)
             config: Configuration dictionary with volume indicator parameters
         """
-        volume_col_name = C.INDICATOR_VOLUME if hasattr(C, 'INDICATOR_VOLUME') else 'volume'
-        if volume_col_name not in df.columns:
-            logger.warning(f"Volume column ('{volume_col_name}') not found. Skipping volume indicators.")
-            return
-
-        close_prices = df[C.INDICATOR_CLOSE_PRICE if hasattr(C, 'INDICATOR_CLOSE_PRICE') else 'close']
-        volume_series = df[volume_col_name]
-
-        # Calculate OBV (On-Balance Volume)
-        obv_cache_key = f"obv:{pd.util.hash_pandas_object(close_prices).sum()}:{pd.util.hash_pandas_object(volume_series).sum()}"
+        volume_series = df['volume'] if 'volume' in df.columns else df['Volume']
+        close_prices = df['close'] if 'close' in df.columns else df['Close']
+        
+        # Calculate OBV
+        vol_close_hash = hash(pd.util.hash_pandas_object(volume_series).sum()) ^ hash(pd.util.hash_pandas_object(close_prices).sum())
+        obv_cache_key = f"obv:{vol_close_hash}"
         cached_obv = cache_manager.get(obv_cache_key)
-        obv_col_const = C.INDICATOR_OBV if hasattr(C, 'INDICATOR_OBV') else 'OBV'
-
+        
         if cached_obv is not None:
-            df[obv_col_const] = cached_obv
+            logger.debug(f"OBV cache hit for key: {obv_cache_key}")
+            df['obv'] = cached_obv
         else:
+            logger.debug(f"OBV cache miss for key: {obv_cache_key}")
             obv_series = ta.obv(close=close_prices, volume=volume_series)
             if obv_series is not None:
-                df[obv_col_const] = obv_series
+                df['obv'] = obv_series
                 cache_manager.set(obv_cache_key, obv_series)
         
-        # Calculate VWAP (Volume Weighted Average Price)
-        # VWAP is typically calculated per-day or other period, pandas_ta might do it on the whole series.
-        # For caching, ensure high, low, close, volume are part of the key.
-        high_prices = df[C.INDICATOR_HIGH_PRICE if hasattr(C, 'INDICATOR_HIGH_PRICE') else 'high']
-        low_prices = df[C.INDICATOR_LOW_PRICE if hasattr(C, 'INDICATOR_LOW_PRICE') else 'low']
+        # Calculate VWAP if needed
+        # Note: VWAP typically requires datetime index and is calculated from market open
+        # This is a simplified version that works regardless of index type
+        if not config.get('calculate_vwap', True):
+            return
+            
+        high_prices = df['high'] if 'high' in df.columns else df['High']
+        low_prices = df['low'] if 'low' in df.columns else df['Low']
 
-        hlcv_hash = (pd.util.hash_pandas_object(high_prices).sum() +
-                     pd.util.hash_pandas_object(low_prices).sum() +
-                     pd.util.hash_pandas_object(close_prices).sum() +
-                     pd.util.hash_pandas_object(volume_series).sum())
+        # Usar XOR para evitar overflow
+        hlcv_hash = hash(pd.util.hash_pandas_object(high_prices).sum()) ^ hash(pd.util.hash_pandas_object(low_prices).sum()) ^ hash(pd.util.hash_pandas_object(close_prices).sum()) ^ hash(pd.util.hash_pandas_object(volume_series).sum())
 
         vwap_cache_key = f"vwap:{hlcv_hash}" # VWAP usually doesn't have a 'period' like other indicators
         cached_vwap = cache_manager.get(vwap_cache_key)
-        vwap_col_const = C.INDICATOR_VWAP if hasattr(C, 'INDICATOR_VWAP') else 'VWAP'
 
         if cached_vwap is not None:
-            df[vwap_col_const] = cached_vwap
+            df['vwap'] = cached_vwap
         else:
             # Check if VWAP already exists (e.g. from data source) before calculating
-            if vwap_col_const not in df.columns:
+            if 'vwap' not in df.columns:
                 vwap_series = ta.vwap(high=high_prices, low=low_prices, close=close_prices, volume=volume_series)
                 if vwap_series is not None:
-                    df[vwap_col_const] = vwap_series
+                    df['vwap'] = vwap_series
                     cache_manager.set(vwap_cache_key, vwap_series)
 
 class IchimokuIndicators(IndicatorGroup):
@@ -378,16 +381,17 @@ class IchimokuIndicators(IndicatorGroup):
             df: DataFrame with OHLCV data (expected to have 'high', 'low' columns)
             config: Configuration dictionary with Ichimoku parameters
         """
-        high_prices = df[C.INDICATOR_HIGH_PRICE if hasattr(C, 'INDICATOR_HIGH_PRICE') else 'high']
-        low_prices = df[C.INDICATOR_LOW_PRICE if hasattr(C, 'INDICATOR_LOW_PRICE') else 'low']
+        high_prices = df['high'] if 'high' in df.columns else df['High']
+        low_prices = df['low'] if 'low' in df.columns else df['Low']
+        close_prices = df['close'] if 'close' in df.columns else df['Close']
 
         tenkan_val = int(config.get('ichimoku_tenkan', 9)) # Add constants for these
         kijun_val = int(config.get('ichimoku_kijun', 26))
         senkou_b_val = int(config.get('ichimoku_senkou_b', 52)) # senkou_span_b in ta
         # chikou_shift_val = int(config.get('ichimoku_chikou_shift', 26)) # chikou is part of senkou_b in ta call
 
-        hl_hash = (pd.util.hash_pandas_object(high_prices).sum() +
-                   pd.util.hash_pandas_object(low_prices).sum())
+        # Usar XOR para evitar overflow
+        hl_hash = hash(pd.util.hash_pandas_object(high_prices).sum()) ^ hash(pd.util.hash_pandas_object(low_prices).sum())
         
         ichimoku_cache_key = f"ichimoku:{hl_hash}:{tenkan_val}:{kijun_val}:{senkou_b_val}"
         cached_ichimoku_data = cache_manager.get(ichimoku_cache_key)
@@ -424,7 +428,7 @@ class IchimokuIndicators(IndicatorGroup):
             # And include_chikou is not a param for the main ichimoku, but for the strategy version.
             # The direct ta.ichimoku returns a DataFrame.
 
-            ichimoku_df = ta.ichimoku(high=high_prices, low=low_prices, tenkan=tenkan_val, kijun=kijun_val, senkou_span_b=senkou_b_val, append=False)
+            ichimoku_df = ta.ichimoku(high=high_prices, low=low_prices, close=close_prices, tenkan=tenkan_val, kijun=kijun_val, senkou_span_b=senkou_b_val, append=False)
 
             if ichimoku_df is not None and isinstance(ichimoku_df, pd.DataFrame) and not ichimoku_df.empty:
                 # Expected columns from pandas_ta.ichimoku (version dependent, e.g. 0.3.14b0):
@@ -434,19 +438,7 @@ class IchimokuIndicators(IndicatorGroup):
                 # For now, let's assume some common constants for our internal use
 
                 # These are EXAMPLE internal names, actual mapping to ta output is crucial.
-                # For example, ta.ichimoku might return 'ITS_9', 'IKS_26', 'ISA_9_26', 'ISB_26_52'
-                # and Chikou might be calculated separately or part of a strategy version of Ichimoku.
-                # The ta.ichimoku function itself (not the strategy) returns columns like:
-                # TENKAN_period, KIJUN_period, SENKOU_A_period, SENKOU_B_period, CHIKOU_period
-
-                # Let's assume these are the columns we want to store internally:
-                # C.ICHIMOKU_TENKAN, C.ICHIMOKU_KIJUN, C.ICHIMOKU_SENKOU_A, C.ICHIMOKU_SENKOU_B, C.ICHIMOKU_CHIKOU
-
-                # Example mapping (THIS NEEDS VERIFICATION AGAINST PANDAS_TA VERSION)
-                # This is highly dependent on the version of pandas_ta and its column naming.
-                # For now, this part is illustrative of caching structure rather than exact ta mapping.
-
-                # Example: if ta.ichimoku() returns columns like 'ITS_9', 'IKS_26', etc.
+                # For example, ta.ichimoku might return 'ITS_9', 'IKS_26', etc.
                 # We would map them: df[C.ICHIMOKU_TENKAN] = ichimoku_df[f'ITS_{tenkan_val}']
                 # This section needs to be robust to pandas_ta's output.
 

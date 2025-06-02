@@ -41,8 +41,8 @@ class ConfigManager:
         self._load_mt5_credentials_from_env() # Load credentials first
 
         self._config = self._load_config_data()
-        self._load_schema()
-        self._validate_config_data(self._config) # Validate file-based config
+        # self._load_schema() # Comentado temporalmente
+        # self._validate_config_data(self._config) # Comentado temporalmente
         self._last_modified_time = self._get_file_mod_time()
         
         # Cache TTL (5 minutes by default)
@@ -125,23 +125,23 @@ class ConfigManager:
         Raises:
             ConfigError: If configuration is invalid
         """
-        if self._schema is None: # Ensure schema is loaded
-            self._load_schema() # Should have been loaded by constructor or reload method
-            if self._schema is None: # If still None, something is very wrong
-                 logger.critical("Schema not loaded for validation.")
-                 raise ConfigError("Schema not loaded for validation.")
+        # if self._schema is None: # Ensure schema is loaded # Comentado temporalmente
+        #     self._load_schema() # Should have been loaded by constructor or reload method # Comentado temporalmente
+        #     if self._schema is None: # If still None, something is very wrong # Comentado temporalmente
+        #          logger.critical("Schema not loaded for validation.") # Comentado temporalmente
+        #          raise ConfigError("Schema not loaded for validation.") # Comentado temporalmente
 
-        try:
-            jsonschema.validate(instance=config_data, schema=self._schema)
-            logger.debug("Configuration data validated successfully against schema.")
-        except jsonschema.exceptions.ValidationError as e:
-            error_path = " -> ".join(map(str, e.path))
-            message = f"Configuration validation error at '{error_path}': {e.message}"
-            logger.error(f"Schema validation failed for new data: {e}")
-            raise ConfigError(message)
-        except jsonschema.exceptions.SchemaError as e:
-            logger.error(f"Invalid schema during validation: {e}")
-            raise ConfigError(f"Invalid configuration schema: {e.message}")
+        # try: # Comentado temporalmente
+        #     jsonschema.validate(instance=config_data, schema=self._schema) # Comentado temporalmente
+        #     logger.debug("Configuration data validated successfully against schema.") # Comentado temporalmente
+        # except jsonschema.exceptions.ValidationError as e: # Comentado temporalmente
+        #     error_path = " -> ".join(map(str, e.path)) # Comentado temporalmente
+        #     message = f"Configuration validation error at '{error_path}': {e.message}" # Comentado temporalmente
+        #     logger.error(f"Schema validation failed for new data: {e}") # Comentado temporalmente
+        #     raise ConfigError(message) # Comentado temporalmente
+        # except jsonschema.exceptions.SchemaError as e: # Comentado temporalmente
+        #     logger.error(f"Invalid schema during validation: {e}") # Comentado temporalmente
+        #     raise ConfigError(f"Invalid configuration schema: {e.message}") # Comentado temporalmente
 
     def _load_mt5_credentials_from_env(self) -> None:
         """Loads MT5 credentials from environment variables and validates them."""

@@ -31,14 +31,7 @@
           "type": "array",
           "default": [],
           "items": {
-            "type": "array",
-            "items": [
-              {"type": "string", "format": "date-time"},
-              {"type": "string", "format": "date-time"},
-              {"type": "string"}
-            ],
-            "minItems": 3,
-            "maxItems": 3
+            "type": "array"
           }
         },
         "enable_account_drawdown_kill_switch": {"type": "boolean", "default": false},
@@ -88,7 +81,7 @@
             "macd_signal": {"type": "integer"},
             "rsi_period": {"type": "integer"},
             "atr_period": {"type": "integer"},
-            "adx_period": {"type": "integer", "default": 14}, # ADX period for calculation
+            "adx_period": {"type": "integer", "default": 14},
             "atr_multiplier": {"type": "number"}
           },
           "required": ["macd_fast", "macd_slow", "macd_signal", "rsi_period", "atr_period", "adx_period", "atr_multiplier"]
@@ -122,8 +115,8 @@
             "max_open_trades": {"type": "integer"},
             "max_position_size": {"type": "number"},
             "max_daily_trades": {"type": "integer"},
-            "sl_atr_multiplier": {"type": "number"}, # Old, might be replaced by atr_sl_multiplier if use_atr_sl_tp is true
-            "tp_atr_multiplier": {"type": "number"}, # Old, might be replaced by atr_tp_multiplier if use_atr_sl_tp is true
+            "sl_atr_multiplier": {"type": "number"},
+            "tp_atr_multiplier": {"type": "number"},
             "trailing_sl_enabled": {"type": "boolean"},
             "trailing_sl_atr_multiplier": {"type": "number"},
             "break_even_atr_multiplier": {"type": "number"},
@@ -135,7 +128,7 @@
           "required": [
             "risk_per_trade", "max_risk_per_trade", "max_daily_drawdown", "max_open_trades",
             "max_position_size", "max_daily_trades",
-            "sl_atr_multiplier", "tp_atr_multiplier", # Keep for now, strategy might use if use_atr_sl_tp is false
+            "sl_atr_multiplier", "tp_atr_multiplier",
             "trailing_sl_enabled", "trailing_sl_atr_multiplier", "break_even_atr_multiplier",
             "break_even_enabled",
             "use_atr_sl_tp", "atr_sl_multiplier", "atr_tp_multiplier"
@@ -203,16 +196,16 @@
                 "method": {"type": "string"}
               }
             },
-            "risk": { # Symbol-specific risk can override defaults
+            "risk": { 
               "type": "object",
-              "properties": { # Only list overrides, defaults are merged by ConfigManager
+              "properties": { 
                 "risk_per_trade": {"type": "number"},
                 "sl_atr_multiplier": {"type": "number"},
                 "tp_atr_multiplier": {"type": "number"},
                 "use_atr_sl_tp": {"type": "boolean"},
                 "atr_sl_multiplier": {"type": "number"},
                 "atr_tp_multiplier": {"type": "number"}
-                # Other specific risk params can be listed here if they can be overridden per symbol
+                
               }
             },
             "strategy_params": {

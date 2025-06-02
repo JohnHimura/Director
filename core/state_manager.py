@@ -263,5 +263,3 @@ class StateManager:
                 logger.info("Cleared all state from database (open_positions, bot_variables).")
         except sqlite3.Error as e:
             logger.error(f"Error clearing all state: {e}", exc_info=True)
-
-```
